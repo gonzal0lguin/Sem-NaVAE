@@ -31,8 +31,8 @@ A `dict` with NumPy arrays. **Every quantity is in the robot frame at the observ
 | `path` | `(≥ N_w, 4)` | main ground-truth future `[x, y, vx, vy]`, waypoints `model.dt` apart (first `N_w` used) |
 | `all_paths` | list of `(N_w, 4)` | every valid ground truth for this observation (Eq. 4); optional, defaults to `[path]` |
 | `goal` | `(2,)` | goal position `[x, y]` |
-| `lidar_dn` | `(N_l, N_p, 4)` | `[x, y, z, intensity]` of the last `N_l` scans, already voxelised to `N_p` points (zero-padded). Alternatively `lidar`: list of raw `(n, 4)` scans, voxelised by the loader. Scans are not motion-compensated. |
-| `local_map` | `(H, W)` | ground-truth semantic map, `1` = non-traversable, `0` = traversable, centred on the robot. **Axis convention: `local_map[i, j]` with `i = x / res + H/2`, `j = y / res + W/2`** (rows follow x). `res = data.semantic_map_resolution` (0.1 m/px); the loader crops `2 · data.semantic_map_half_size_px` (600 px = 60 m) around the centre. Used only by the collision loss. |
+| `lidar_dn` | `(N_l, N_p, 4)` | `[x, y, z, intensity]` of the last `N_l` scans, already voxelised to `N_p` points (zero-padded). Alternatively `lidar`: list of raw `(n, 4)` scans, voxelised by the loader. Scans are not motion-compensated. An optional fifth column holds per-point traversability labels (0/1) for `scripts/pretrain_pointnet.py`; without it, labels are derived from `local_map`. |
+| `local_map` | `(H, W)` | ground-truth semantic map, `1` = non-traversable, `0` = traversable, centred on the robot. **Axis convention: `local_map[i, j]` with `i = x / res + H/2`, `j = y / res + W/2`** (rows follow x). `res = data.semantic_map_resolution` (0.1 m/px); the loader crops `2 · data.semantic_map_half_size_px` (600 px = 60 m) around the centre. Used by the collision loss and to label points for PointNet pre-training. |
 | `pose` | `(3,)` | robot pose `[x, y, yaw]` in the dataset's world frame (kept for analysis, not a model input) |
 
 ## What the loader does
