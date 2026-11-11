@@ -54,6 +54,38 @@ def load_or_create_split(cfg: Config, ids: List[str]) -> Dict[str, List[str]]:
     return split
 
 
+def goal_input(goal: np.ndarray, goal_norm_dist: float) -> np.ndarray:
+    """Polar goal input ``[rho / goal_norm_dist, theta / pi]`` from the robot-frame goal."""
+    rho = np.linalg.norm(goal[:2]) / goal_norm_dist
+    theta = np.arctan2(goal[1], goal[0]) / np.pi
+    return np.array([rho, theta])
+
+
+def observation_inputs(meta: dict, cfg: Config) -> Dict[str, np.ndarray]:
+    """Model inputs (LiDAR, goal, past trajectory) of one sample dict (dataset format)."""
+    m = cfg.model
+    if meta.get("lidar_dn") is not None:
+        scans = np.array(meta["lidar_dn"], dtype=np.float32)[..., :4]
+    else:
+        scans = np.stack(
+            [
+                voxelize_with_intensity(s, m.lidar_voxel_size, m.lidar_max_points)
+                for s in meta["lidar"]
+            ]
+        )
+    # Last N_v past states; velocities are divided by max_vel (the only normalised
+    # quantity: positions stay in metres, GT and decoder velocities in m/s).
+    past = np.array(meta["previous_path"][-m.past_traj_len :, :4], dtype=np.float64)
+    if len(past) != m.past_traj_len:
+        raise ValueError(f"previous_path has {len(past)} states, need {m.past_traj_len}")
+    past[:, 2:] = past[:, 2:] / m.max_vel
+    return {
+        Keys.lidar: normalize_lidar(scans, m.lidar_norm_dist),
+        Keys.goal: goal_input(meta["goal"], cfg.data.goal_norm_dist),
+        Keys.past_traj: past,
+    }
+
+
 def _worker_init(worker_id: int) -> None:
     seed = torch.initial_seed() % 2**32
     np.random.seed(seed)  # noqa: NPY002
@@ -95,12 +127,6 @@ class NaVAEDataset(Dataset):
             read_pkl(os.path.join(self.root, self.samples_dir, self.ids[i][0])), i
         )
 
-    def _goal_input(self, goal: np.ndarray) -> np.ndarray:
-        """Polar goal input ``[rho / goal_norm_dist, theta / pi]`` from the robot-frame goal."""
-        rho = np.linalg.norm(goal[:2]) / self.cfg.data.goal_norm_dist
-        theta = np.arctan2(goal[1], goal[0]) / np.pi
-        return np.array([rho, theta])
-
     def _crop_map(self, semantic_map: np.ndarray) -> np.ndarray:
         h = self.cfg.data.semantic_map_half_size_px
         cy, cx = semantic_map.shape[0] / 2, semantic_map.shape[1] / 2
@@ -116,25 +142,7 @@ class NaVAEDataset(Dataset):
             all_paths = [path]
         sample[Keys.all_paths] = [np.asarray(p)[: m.num_waypoints, :4] for p in all_paths]
 
-        if meta.get("lidar_dn") is not None:
-            scans = np.array(meta["lidar_dn"], dtype=np.float32)
-        else:
-            scans = np.stack(
-                [
-                    voxelize_with_intensity(s, m.lidar_voxel_size, m.lidar_max_points)
-                    for s in meta["lidar"]
-                ]
-            )
-        sample[Keys.lidar] = normalize_lidar(scans, m.lidar_norm_dist)
-        sample[Keys.goal] = self._goal_input(meta["goal"])
-
-        # Last N_v past states; velocities are divided by max_vel (the only normalised
-        # quantity: positions stay in metres, GT and decoder velocities in m/s).
-        past = np.array(meta["previous_path"][-m.past_traj_len :, :4], dtype=np.float64)
-        if len(past) != m.past_traj_len:
-            raise ValueError(f"previous_path has {len(past)} states, need {m.past_traj_len}")
-        past[:, 2:] = past[:, 2:] / m.max_vel
-        sample[Keys.past_traj] = past
+        sample.update(observation_inputs(meta, self.cfg))
         sample[Keys.semantic_map] = self._crop_map(meta["local_map"])
         if not self.train:
             sample[Keys.sample_id] = np.asarray([int(self.ids[i][1][:-4])])
