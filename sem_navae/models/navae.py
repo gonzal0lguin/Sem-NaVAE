@@ -165,9 +165,8 @@ class NaVAE(nn.Module):
             # TODO(T3): logmeanexp already subtracts log(M_b).
             lme_over_M = logmeanexp(ll_NM, dim=1) - math.log(M_b)
             prior_lme.append(logmeanexp(lme_over_M, dim=0))
-            best = torch.argmax(lme_over_M)
-            # TODO(T1): detached and later integrated a second time by the collision loss.
-            prior_means.append(torch.cumsum(loc[best], dim=0).detach())
+            # Positions of every prior mean trajectory, kept in the graph for L_col (Eq. 5).
+            prior_means.append(torch.cumsum(loc, dim=1) * self.cfg.dt)
 
             # ----- posterior: one latent per GT -----
             hx_M = h_x[b].unsqueeze(0).expand(M_b, -1)

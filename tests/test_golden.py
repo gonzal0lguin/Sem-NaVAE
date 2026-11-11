@@ -109,11 +109,14 @@ def test_train_forward_and_loss(setup):
         (Keys.kl, "train_kl"),
     ]:
         np.testing.assert_allclose(out[key].item(), GOLDEN[golden], **TOL)
-    np.testing.assert_allclose(
-        out[Keys.prior_mean_paths].numpy(), GOLDEN["train_prior_mean_paths"], **TOL
-    )
-    np.testing.assert_allclose(losses[Keys.loss].item(), GOLDEN["train_loss"], **TOL)
-    np.testing.assert_allclose(losses[Keys.collision_loss].item(), GOLDEN["train_collision"], **TOL)
+    # T1: the legacy collision term saw only the best prior mean, detached; the port keeps
+    # every prior mean (B, N, N_w, 2) in the graph. The legacy path must be one of them.
+    paths = out[Keys.prior_mean_paths].detach().numpy()
+    for b, legacy_path in enumerate(GOLDEN["train_prior_mean_paths"]):
+        assert np.abs(paths[b] - legacy_path).max(axis=(1, 2)).min() < 1e-4
+    # T2: Eq. 5 replaces the legacy arctanh distance penalty (no golden value).
+    expected = out[Keys.nll] + losses[Keys.kl_loss] + losses[Keys.collision_loss]
+    np.testing.assert_allclose(losses[Keys.loss].item(), expected.item(), **TOL)
 
 
 def test_sample_forward(setup):
