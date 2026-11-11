@@ -20,6 +20,7 @@ from legacy_init import (  # noqa: E402
     synthetic_batch,
     to_torch_batch,
 )
+from legacy_rules import apply_legacy_rules  # noqa: E402
 
 from sem_navae.config import Config, HeatmapSpec  # noqa: E402
 from sem_navae.keys import Keys  # noqa: E402
@@ -54,6 +55,7 @@ def setup():
     model = NaVAE(cfg.model)
     names = deterministic_init(model)
     model.decoder.heatmap_spec = LEGACY_DECODER_SPEC
+    apply_legacy_rules(model)
     model.eval()
     arrays = synthetic_batch()
     return cfg, model, names, (lambda: to_torch_batch(arrays, map_key=Keys.semantic_map))

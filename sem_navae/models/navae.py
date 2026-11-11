@@ -64,6 +64,7 @@ class NaVAE(nn.Module):
             max_speed=cfg.max_speed,
             max_accel=cfg.max_accel,
             max_heading_change=math.radians(cfg.max_heading_change_deg),
+            dt=cfg.dt,
         )
 
     @property
