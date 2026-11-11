@@ -37,8 +37,8 @@ include = ["sem_navae*"]
 [tool.ruff]
 line-length = 100
 target-version = "py38"
-# Not yet rewritten (generator: R8, Phase 4).
-extend-exclude = ["ros/*/build", "ros/*/devel", "ros/sem_navae_ros/nodes/generator_node.py", "ros/sem_navae_ros/nodes/tf_to_pose_publisher.py"]
+# tf_to_pose_publisher is a verbatim third-party-style helper for elevation_mapping.
+extend-exclude = ["ros/*/build", "ros/*/devel", "ros/sem_navae_ros/nodes/tf_to_pose_publisher.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "NPY"]
