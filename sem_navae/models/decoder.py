@@ -16,7 +16,7 @@ from sem_navae.models.heatmap import metric_to_pixel
 class StochasticDecoder(nn.Module):
     """GRU decoder that outputs a diagonal Gaussian over the N_w future velocities.
 
-    When the next input is not teacher-forced, it is drawn by rejection sampling: a batch of
+    The next input is drawn by rejection sampling: a batch of
     proposals from the current step's Gaussian is filtered by speed, acceleration, heading and
     (optionally) heatmap constraints, and the first valid proposal is kept (the mean if none
     is valid). Velocities are in m/s; waypoints are ``dt`` seconds apart.
@@ -81,7 +81,6 @@ class StochasticDecoder(nn.Module):
         h_x: torch.Tensor,
         z: torch.Tensor,
         heatmap: Optional[torch.Tensor] = None,
-        gt: Optional[torch.Tensor] = None,
         current_state: Optional[torch.Tensor] = None,
     ):
         """
@@ -89,7 +88,6 @@ class StochasticDecoder(nn.Module):
             h_x: ``(B, context_dim)`` context.
             z: ``(B, latent_dim)`` latent sample.
             heatmap: ``(B, H, W)`` traversability heatmap (needed for heatmap / map features).
-            gt: ``(N_w, B, 4)`` ground truth [x, y, vx, vy] for teacher forcing, or None.
             current_state: ``(B, 2)`` current velocity used as the first input (zeros if None).
         """
         B = h_x.size(0)
@@ -119,11 +117,8 @@ class StochasticDecoder(nn.Module):
             if i == self.steps - 1:
                 break
 
-            if gt is not None:
-                pred = gt[:, :, 2:4][i + 1]
-            else:
-                proposals = Independent(Normal(mu, std), 2).rsample((self.num_proposals,))
-                pred = self.constrained_sample(proposals, pred_tm1, heatmap, mu, preds)
+            proposals = Independent(Normal(mu, std), 2).rsample((self.num_proposals,))
+            pred = self.constrained_sample(proposals, pred_tm1, heatmap, mu, preds)
             pred_tm1 = pred.clone()
             preds.append(pred)
 

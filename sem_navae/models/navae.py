@@ -90,8 +90,8 @@ class NaVAE(nn.Module):
             batch[Keys.past_traj], batch[Keys.lidar], batch[Keys.goal], train=train
         )
 
-    def decode(self, h_x, z, heatmap=None, gt=None, current_state=None):
-        return self.decoder(h_x, z, heatmap=heatmap, gt=gt, current_state=current_state)
+    def decode(self, h_x, z, heatmap=None, current_state=None):
+        return self.decoder(h_x, z, heatmap=heatmap, current_state=current_state)
 
     def heatmap(
         self, lidar: torch.Tensor, logprobs, labels, sigma: Optional[float] = None
@@ -106,43 +106,18 @@ class NaVAE(nn.Module):
     def _current_velocity(batch: dict) -> torch.Tensor:
         return batch[Keys.past_traj][:, -1, 2:4]
 
-    def forward(self, batch: dict, train: bool = False) -> dict:
-        """Single-GT pass: decode one posterior and one prior sample (used for validation)."""
-        h_x, (mu_x, logvar_x), (logprobs, labels) = self.encode(batch, train=train)
-        p_dist = independent_normal(mu_x, torch.exp(logvar_x * 0.5))
-        ghm = None
-        if self.needs_heatmap:
-            ghm = self.heatmap(batch[Keys.lidar], logprobs, labels)
-
-        gt_traj = batch[Keys.path][:, :, 2:4]
-        mu_y, logvar_y = self.posterior_encoder(h_x, gt_traj, train=train)
-        q_dist = independent_normal(mu_y, torch.exp(logvar_y * 0.5))
-
-        current = self._current_velocity(batch)
-        y_hat_q = self.decode(
-            h_x, q_dist.rsample(), ghm, gt=batch[Keys.path].permute(1, 0, 2), current_state=current
-        )
-        y_hat = self.decode(h_x, p_dist.rsample(), ghm, current_state=current)
-
-        batch.update(
-            {
-                Keys.y_hat: y_hat,
-                Keys.y_hat_q: y_hat_q,
-                Keys.p_dist: p_dist,
-                Keys.q_dist: q_dist,
-                Keys.heatmap: ghm,
-            }
-        )
-        return batch
-
-    def train_multimodal_forward(
+    def forward(
         self,
         batch: dict,
         num_prior_samples: int = 6,
         heatmap_sigma: Optional[float] = None,
     ) -> dict:
-        """Training pass with every valid GT per observation (log-mean-exp likelihood, Eq. 4)."""
-        h_x, (mu_x, logvar_x), (logprobs, labels) = self.encode(batch, train=True)
+        """ELBO terms with every valid GT per observation (Eq. 3-4); used for train and eval.
+
+        Writes ``nll``, ``ll_prior``, ``ll_posterior``, ``kl`` (per observation, KL(q || p)),
+        ``prior_mean_paths`` ``(B, N, N_w, 2)`` positions and ``heatmap`` into ``batch``.
+        """
+        h_x, (mu_x, logvar_x), (logprobs, labels) = self.encode(batch, train=self.training)
         B = h_x.size(0)
         p_latent = independent_normal(mu_x, torch.exp(0.5 * logvar_x))
         ghm = None
@@ -152,7 +127,7 @@ class NaVAE(nn.Module):
         current = self._current_velocity(batch)
         N = num_prior_samples
         prior_lme, post_lme, kls = [], [], []
-        prior_means, post_means = [], []
+        prior_means = []
 
         for b in range(B):
             Yb = torch.stack(batch[Keys.all_paths][b], dim=0)[:, :, 2:4].to(h_x.device)
@@ -182,7 +157,7 @@ class NaVAE(nn.Module):
 
             # ----- posterior: one latent per GT -----
             hx_M = h_x[b].unsqueeze(0).expand(M_b, -1)
-            mu_q, logvar_q = self.posterior_encoder(hx_M, Yb, train=True)
+            mu_q, logvar_q = self.posterior_encoder(hx_M, Yb, train=self.training)
             q_dist = independent_normal(mu_q, torch.exp(0.5 * logvar_q))
             kl_b = kl_diag_gaussians(
                 mu_q,
@@ -190,7 +165,7 @@ class NaVAE(nn.Module):
                 mu_x[b].unsqueeze(0).expand_as(mu_q),
                 logvar_x[b].unsqueeze(0).expand_as(logvar_q),
             )
-            kls.append(kl_b.mean())
+            kls.append(kl_b.mean())  # KL(q || p), averaged over the M_b ground truths
 
             z_q = q_dist.rsample()
             hm_M = ghm[b : b + 1].expand(M_b, *ghm.shape[1:]) if ghm is not None else None
@@ -199,7 +174,6 @@ class NaVAE(nn.Module):
             )
             # Eq. 4: plain expectation over the posterior (one z_q per ground truth).
             post_lme.append(q_hat.log_prob(Yb).mean())
-            post_means.append(q_hat.base_dist.loc.detach())
 
         ll_prior = torch.stack(prior_lme).mean()
         ll_posterior = torch.stack(post_lme).mean()
@@ -208,10 +182,9 @@ class NaVAE(nn.Module):
                 Keys.nll: -(ll_prior + ll_posterior),
                 Keys.ll_prior: ll_prior,
                 Keys.ll_posterior: ll_posterior,
-                Keys.kl: torch.stack(kls).mean(),
+                Keys.kl: torch.stack(kls),
                 Keys.p_dist: p_latent,
                 Keys.prior_mean_paths: torch.stack(prior_means),
-                Keys.post_mean_paths: post_means,
                 Keys.heatmap: ghm,
             }
         )

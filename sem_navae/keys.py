@@ -15,12 +15,9 @@ class Keys:
 
     # --- model outputs ---
     y_hat = "y_hat"
-    y_hat_q = "y_hat_q"
     p_dist = "p_dist"
-    q_dist = "q_dist"
     heatmap = "heatmap"
     prior_mean_paths = "prior_mean_paths"
-    post_mean_paths = "post_mean_paths"
     nll = "nll"
     kl = "kl"
     ll_prior = "ll_prior"
@@ -28,9 +25,6 @@ class Keys:
 
     # --- loss outputs ---
     loss = "loss"
-    kl_loss = "vae_kld_loss"
-    loglikelihood = "loglikelihood"
-    collision_loss = "collision_loss_mean"
+    kl_loss = "kl_loss"
+    collision_loss = "collision_loss"
     kl_weight = "kl_weight"
-    ade = "ade_best"
-    fde = "fde_best"

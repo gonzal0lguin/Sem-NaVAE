@@ -5,7 +5,6 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.distributions import kl_divergence
 
 from sem_navae.config import DataConfig, LossConfig
 from sem_navae.keys import Keys
@@ -55,41 +54,29 @@ class NaVAELoss(nn.Module):
         )
         return torch.log1p(values.squeeze(1).sum(dim=-1))
 
-    # ------------------------------------------------------------------ objectives
-    def train_loss(self, out: dict, epoch: int) -> dict:
-        """Multi-GT objective on the output of ``NaVAE.train_multimodal_forward``."""
-        paths = out[Keys.prior_mean_paths]  # (B, N, N_w, 2) positions, attached to the graph
-        col = self.collision_loss(paths, out[Keys.semantic_map]).mean() * self.cfg.collision_weight
-        beta = self.kl_weight(epoch)
-        loss = out[Keys.nll] + beta * out[Keys.kl] + col
-        return {
-            Keys.loss: loss,
-            Keys.kl_loss: beta * out[Keys.kl],
-            Keys.ll_prior: out[Keys.nll],
-            Keys.collision_loss: col,
-            Keys.kl_weight: beta,
-        }
+    # ------------------------------------------------------------------ objective
+    def forward(self, out: dict, epoch: int) -> dict:
+        """``L = beta * KL(q || p) + L_recon + lambda * L_col`` on the output of ``NaVAE``.
 
-    def eval_loss(self, out: dict, epoch: int) -> dict:
-        """Single-GT objective on the output of ``NaVAE.forward``."""
-        y_gt = out[Keys.path][:, :, 2:4]
-        # TODO(T4): this is KL(p || q) with free bits, the training path uses KL(q || p).
-        kl = kl_divergence(out[Keys.p_dist], out[Keys.q_dist])
+        The same objective is used for training and validation. The KL is KL(q || p) (the
+        standard ELBO term; Eq. 3 prints D_KL(p || q), see docs/errata.md). With
+        ``free_bits > 0`` each observation's KL is floored at that value (default off).
+        """
+        kl = out[Keys.kl]
         if self.cfg.free_bits > 0:
             kl = torch.clamp(kl, min=self.cfg.free_bits)
         kl = kl.mean()
-        ll_prior = out[Keys.y_hat].log_prob(y_gt).mean()
-        ll_posterior = out[Keys.y_hat_q].log_prob(y_gt).mean()
-        col = self.collision_loss(out[Keys.y_hat].mean.cumsum(dim=1), out[Keys.semantic_map])
-        col = col.mean() * self.cfg.collision_weight
         beta = self.kl_weight(epoch)
-        loss = -(ll_posterior + ll_prior - beta * kl) + col
+        col = self.collision_loss(out[Keys.prior_mean_paths], out[Keys.semantic_map])
+        col = col.mean() * self.cfg.collision_weight
+        loss = out[Keys.nll] + beta * kl + col
         return {
             Keys.loss: loss,
+            Keys.nll: out[Keys.nll],
+            Keys.ll_prior: out[Keys.ll_prior],
+            Keys.ll_posterior: out[Keys.ll_posterior],
+            Keys.kl: kl,
             Keys.kl_loss: beta * kl,
-            Keys.loglikelihood: ll_posterior + ll_prior,
-            Keys.ll_prior: ll_prior,
-            Keys.ll_posterior: ll_posterior,
             Keys.collision_loss: col,
             Keys.kl_weight: beta,
         }

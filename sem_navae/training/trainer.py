@@ -95,10 +95,8 @@ class Trainer:
                 break
             self.iteration += 1
             batch = to_device(batch, self.device)
-            out = self.model.train_multimodal_forward(
-                batch, num_prior_samples=self.cfg.loss.num_prior_samples
-            )
-            losses = self.loss.train_loss(out, self.epoch)
+            out = self.model(batch, num_prior_samples=self.cfg.loss.num_prior_samples)
+            losses = self.loss(out, self.epoch)
             self.optimizer.zero_grad(set_to_none=True)
             losses[Keys.loss].backward()
             if self.tcfg.grad_clip_norm:
@@ -113,8 +111,8 @@ class Trainer:
         sums, n = defaultdict(float), 0
         for batch in tqdm(self.val_loader, desc="eval"):
             batch = to_device(batch, self.device)
-            out = self.model(batch)
-            stats = release_cuda(self.loss.eval_loss(out, self.epoch))
+            out = self.model(batch, num_prior_samples=self.cfg.loss.num_prior_samples)
+            stats = release_cuda(self.loss(out, self.epoch))
             samples = self.model.sample_forward(batch, num_samples=self.tcfg.eval_num_samples)
             positions = samples[Keys.y_hat].cumsum(dim=2)
             stats.update(release_cuda(min_ade_fde(positions, batch[Keys.path][:, :, :2])))
