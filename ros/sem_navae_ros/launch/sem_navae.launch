@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="elevation" default="false"/>
+                      
+    <rosparam command="load" file="$(find sem_navae_ros)/config/sem_navae.yaml" />
+
+    <node name="sem_navae_generator"   pkg="sem_navae_ros" type="generator_node.py" output="screen"/>
+
+    <node name="wp_projector" pkg="sem_navae_ros" type="visualizer_node.py" output="screen"/>
+
+    <group if="$(arg elevation)">
+        <include file="$(find sem_navae_ros)/launch/elevation.launch" />
+    </group>
+
+
+</launch>

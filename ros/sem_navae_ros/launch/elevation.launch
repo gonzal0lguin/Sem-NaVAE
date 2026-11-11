@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<launch>
+
+    <arg name="vis" default="false"/>
+    
+    <node name="odom2pose" pkg="sem_navae_ros" type="tf_to_pose_publisher.py" output="screen"/>
+
+    <node pkg="elevation_mapping" type="elevation_mapping" name="elevation_mapping" output="screen">
+        <rosparam command="load" file="$(find sem_navae_ros)/config/elevation_mapping.yaml"/>
+        <rosparam command="load" file="$(find sem_navae_ros)/config/postprocessor_pipeline.yaml"/>
+    </node>
+
+    <node name="gridmap_image" pkg="sem_navae_ros" type="grid_map_collisions" output="screen"/>
+    
+
+    <group if="$(arg vis)">
+        <!-- Launch visualizations for the resulting elevation map -->
+        <include file="$(find elevation_mapping_demos)/launch/visualization.launch" />
+        <node name="rviz" pkg="rviz" type="rviz" args="-d $(find elevation_mapping_demos)/rviz/elevation_map_visualization.rviz" />
+    </group>
+
+</launch>

@@ -58,7 +58,7 @@ def main(legacy_root: str, pointnet_root: str) -> None:
         )
         out.update(hx=hx.numpy(), mu=mu.numpy(), logvar=logvar.numpy(), logprobs=logp.numpy())
         ghm = model.create_heatmap(b["lidar"].reshape(-1, 7680, 4), logp, labels, sigma=5)
-        out["heatmap_sigma5"] = ghm.numpy()
+        out["heatmap_sigma5"] = ghm.numpy()[:, ::3, ::3]  # subsampled to keep the file small
 
         torch.manual_seed(1)
         f = model(batch())

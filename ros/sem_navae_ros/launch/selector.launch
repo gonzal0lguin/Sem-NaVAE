@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<launch>
+    
+    <node name="sem_navae_selector" pkg="sem_navae_ros" type="selector_node.py" output="screen">
+        <rosparam command="load" file="$(find sem_navae_ros)/config/sem_navae.yaml"/>
+    </node>
+    
+</launch>

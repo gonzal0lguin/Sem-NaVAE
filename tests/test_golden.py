@@ -66,7 +66,7 @@ def test_perception_and_heatmap(setup):
     np.testing.assert_allclose(mu.numpy(), GOLDEN["mu"], **TOL)
     np.testing.assert_allclose(logvar.numpy(), GOLDEN["logvar"], **TOL)
     np.testing.assert_allclose(logp.numpy(), GOLDEN["logprobs"], **TOL)
-    np.testing.assert_allclose(ghm.numpy(), GOLDEN["heatmap_sigma5"], **TOL)
+    np.testing.assert_allclose(ghm.numpy()[:, ::3, ::3], GOLDEN["heatmap_sigma5"], **TOL)
 
 
 def test_forward(setup):

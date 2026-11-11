@@ -1,0 +1,54 @@
+model:
+  checkpoint: ''  # path to a sem_navae training checkpoint (.pt)
+  waypoints_follow_num: 12
+  goal_th: 5.0 # [m]
+  localization_mode: "amcl"
+  trajectory_gen_period: 0.5 # [s] 
+  max_wpts: 12
+  n_paths: 200
+  publish_heatmap: true
+
+annotation:
+  annotation_color:    [255, 0, 0]
+  publish_downn_cloud: true
+
+topics: 
+  ouster:        '/ouster/points' #/repub/ouster/points'
+  odom:          '/odom' #'/panther/odometry/filtered'
+  camera_ns:     '/camera'
+  global_goal:   '/sem_navae/global_goal_xy'
+  trajs_out:     '/sem_navae/trajectories'
+  # trajs_filt:    '/sem_navae/trajectories'
+  down_cloud:    '/sem_navae/downsampled_cloud'
+  visualization: '/sem_navae/visualization'
+  annotation:    '/sem_navae/annotated_trajectories'
+  img_array:     '/sem_navae/img_array'
+
+
+selection:
+  strategy:  'clip_running_cost' # barebones, clip_running_cost, clip_periodic
+  
+  constraints: {"a paved road": 0,
+                "trees": 3, 
+                "grass": 2, 
+                "sky": 3, 
+                "wall": 3, 
+                "stair": 3, 
+                "person": 3, 
+                "hole": 3}
+  
+  unknown_cost: 2
+
+  discount_factor: 0.8
+  goal_dst_w: 2
+  goal_angle_w: 0.1
+  collision_w: 1
+  improvement_eps: 0.15
+
+# elevation_filter:
+#   robot_footprint_x: 0.5 # in meters
+#   collision_elevation_th: 0.18 # in meters
+#   collision_angle_th: 6 # in degrees
+#   sub_map_collision_size: 16.0 # in meters
+#   use_odom_frame: false
+#   max_wpts: 15
