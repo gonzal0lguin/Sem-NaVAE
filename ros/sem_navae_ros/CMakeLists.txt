@@ -48,7 +48,6 @@ catkin_install_python(PROGRAMS
   nodes/visualizer_node.py
   nodes/tf_to_pose_publisher.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
-install(FILES nodes/message_helpers.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 install(DIRECTORY launch config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 
 if(CATKIN_ENABLE_TESTING)

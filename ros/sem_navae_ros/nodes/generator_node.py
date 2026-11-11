@@ -15,8 +15,8 @@ import rospy
 import sensor_msgs.point_cloud2 as pc2
 import torch
 from geometry_msgs.msg import PointStamped, PoseStamped, PoseWithCovarianceStamped
-from message_helpers import cv2_to_imgmsg, numpy_to_path, param
 from nav_msgs.msg import Odometry
+from sem_navae_ros.message_helpers import cv2_to_imgmsg, numpy_to_path, param
 from sem_navae_ros.msg import PathArray
 from sensor_msgs.msg import CompressedImage, Image, PointCloud2, PointField
 from std_msgs.msg import Empty, Header

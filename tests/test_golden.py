@@ -30,6 +30,13 @@ from sem_navae.utils.geometry import get_path_dist_to_goal  # noqa: E402
 
 GOLDEN = np.load(os.path.join(os.path.dirname(__file__), "golden", "legacy_model.npz"))
 TOL = dict(rtol=1e-4, atol=1e-5)
+# The training-pass goldens depend on the dropout random stream, which changes between torch
+# releases; they are only comparable with the torch version that recorded them.
+GOLDEN_TORCH = "2.15"
+same_dropout_rng = pytest.mark.skipif(
+    not torch.__version__.startswith(GOLDEN_TORCH + "."),
+    reason=f"dropout RNG goldens recorded with torch {GOLDEN_TORCH}",
+)
 
 
 def legacy_config() -> Config:
@@ -79,6 +86,7 @@ def test_perception_and_heatmap(setup):
     np.testing.assert_allclose(ghm.numpy()[:, ::3, ::3], GOLDEN["heatmap_sigma5"], **TOL)
 
 
+@same_dropout_rng
 def test_train_forward_and_loss(setup):
     cfg, model, _, batch = setup
     torch.manual_seed(2)

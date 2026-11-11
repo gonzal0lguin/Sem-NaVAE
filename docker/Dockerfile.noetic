@@ -1,0 +1,53 @@
+# Sem-NaVAE on ROS 1 Noetic (Ubuntu 20.04, Python 3.8), CPU PyTorch by default.
+#
+#   docker build -f docker/Dockerfile.noetic -t sem-navae:noetic .
+#   docker run --rm -it sem-navae:noetic                     # shell with the workspace sourced
+#   docker run --rm sem-navae:noetic pytest /sem_navae/tests
+#
+# CUDA: --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 (and run with --gpus all).
+# CLIPSeg (transformers) is installed with --build-arg EXTRAS=train,selection,dev.
+FROM ros:noetic
+
+ARG TORCH_VERSION=2.4.1
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG EXTRAS=train,dev
+# Optional Ubuntu mirror (e.g. http://mirrors.edge.kernel.org/ubuntu) if archive.ubuntu.com
+# is unreachable from the build host.
+ARG UBUNTU_MIRROR=
+ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
+
+RUN if [ -n "${UBUNTU_MIRROR}" ]; then \
+        sed -i -E "s#http://(archive|security).ubuntu.com/ubuntu#${UBUNTU_MIRROR}#g" /etc/apt/sources.list; \
+    fi
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip python3-catkin-tools python3-osrf-pycommon git \
+    && rm -rf /var/lib/apt/lists/*
+
+# ROS dependencies of the catkin package (elevation_mapping is only needed at run time by
+# elevation.launch and is not released as a Noetic binary: build it from source if needed).
+COPY ros/sem_navae_ros/package.xml /catkin_ws/src/sem_navae_ros/package.xml
+RUN apt-get update && rosdep update --rosdistro noetic \
+    && rosdep install -y --from-paths /catkin_ws/src --ignore-src --rosdistro noetic \
+        --skip-keys elevation_mapping \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --upgrade pip \
+    && pip3 install "torch==${TORCH_VERSION}" --index-url "${TORCH_INDEX_URL}"
+
+# Core Python package (editable, so a bind mount over /sem_navae picks up local changes).
+COPY . /sem_navae
+RUN pip3 install -e "/sem_navae[${EXTRAS}]"
+
+# Catkin workspace with the ROS package.
+RUN rm -rf /catkin_ws/src/sem_navae_ros \
+    && ln -s /sem_navae/ros/sem_navae_ros /catkin_ws/src/sem_navae_ros \
+    && cd /catkin_ws && . /opt/ros/noetic/setup.sh \
+    && catkin config --extend /opt/ros/noetic --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && catkin build --no-status sem_navae_ros
+
+RUN echo "source /catkin_ws/devel/setup.bash" >> /root/.bashrc
+COPY docker/entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]
+WORKDIR /sem_navae

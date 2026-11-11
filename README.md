@@ -4,6 +4,7 @@
 
 Gonzalo Olguín, Javier Ruiz-del-Solar · *IEEE Robotics and Automation Letters*, 2026
 
+[![CI](https://github.com/gonzal0lguin/Sem-NaVAE/actions/workflows/ci.yml/badge.svg)](https://github.com/gonzal0lguin/Sem-NaVAE/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![ROS Noetic](https://img.shields.io/badge/ROS-Noetic-22314E.svg)](https://wiki.ros.org/noetic)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-3776AB.svg)](pyproject.toml)
@@ -104,6 +105,18 @@ cd ~/catkin_ws && rosdep install --from-paths src --ignore-src -y && catkin buil
 The elevation collision filter also needs
 [elevation_mapping](https://github.com/ANYbotics/elevation_mapping) and
 [grid_map](https://github.com/ANYbotics/grid_map).
+
+### Docker
+
+`docker/Dockerfile.noetic` builds a ROS Noetic image with CPU PyTorch, the core package
+and the catkin workspace:
+
+```bash
+docker build -f docker/Dockerfile.noetic -t sem-navae:noetic .
+docker run --rm -it sem-navae:noetic          # shell with the workspace sourced
+```
+
+See the comments at the top of the Dockerfile for CUDA and CLIPSeg build arguments.
 
 ## Quick start (no robot needed)
 

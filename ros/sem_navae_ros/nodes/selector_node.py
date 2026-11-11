@@ -18,7 +18,9 @@ import numpy as np
 import rospy
 import tf2_ros
 from geometry_msgs.msg import Twist
-from message_helpers import (
+from nav_msgs.msg import Odometry, Path
+from sem_navae_ros.local_planners import PlannerStatus, load_local_planner
+from sem_navae_ros.message_helpers import (
     camera_params,
     collisions_from_msg,
     colorize_labels,
@@ -33,8 +35,6 @@ from message_helpers import (
     rotate_in_place,
     stop_robot,
 )
-from nav_msgs.msg import Odometry, Path
-from sem_navae_ros.local_planners import PlannerStatus, load_local_planner
 from sem_navae_ros.msg import PathArray
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Joy
 from std_msgs.msg import Empty, Float32

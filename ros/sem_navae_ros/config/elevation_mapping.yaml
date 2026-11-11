@@ -5,7 +5,7 @@ robot_pose_with_covariance_topic:           /odom_pose
 robot_pose_cache_size:                      10
 input_sources:
   front: # A name to identify the input source
-    type: pointcloud 
+    type: pointcloud
     topic: /ouster/points
     queue_size: 100
     publish_on_update: true # Wheter to publish the elevation map after a callback from this source.

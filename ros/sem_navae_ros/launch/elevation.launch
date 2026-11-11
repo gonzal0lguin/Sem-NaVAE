@@ -2,7 +2,7 @@
 <launch>
 
     <arg name="vis" default="false"/>
-    
+
     <node name="odom2pose" pkg="sem_navae_ros" type="tf_to_pose_publisher.py" output="screen"/>
 
     <node pkg="elevation_mapping" type="elevation_mapping" name="elevation_mapping" output="screen">
@@ -17,7 +17,7 @@
         <remap from="trajectories"      to="/sem_navae/trajectories"/>
         <remap from="trajectories_filt" to="/sem_navae/trajectories_filt"/>
     </node>
-    
+
 
     <group if="$(arg vis)">
         <!-- Launch visualizations for the resulting elevation map -->

@@ -8,7 +8,8 @@ import numpy as np
 import rospy
 import tf2_ros
 from geometry_msgs.msg import Point, Vector3
-from message_helpers import (
+from nav_msgs.msg import Path
+from sem_navae_ros.message_helpers import (
     camera_params,
     collisions_from_msg,
     cv2_to_imgmsg,
@@ -17,7 +18,6 @@ from message_helpers import (
     param,
     patharray_to_numpy,
 )
-from nav_msgs.msg import Path
 from sem_navae_ros.msg import PathArray
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from visualization_msgs.msg import Marker, MarkerArray

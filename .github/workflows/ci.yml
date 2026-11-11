@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (pre-commit)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pre-commit
+      - run: pre-commit run --all-files --show-diff-on-failure
+
+  pytest:
+    name: pytest (Python ${{ matrix.python }}, CPU)
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.8", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[train,dev]"
+      # Includes the one-epoch training smoke test on synthetic data.
+      - run: pytest -q
+
+  ros-noetic:
+    name: ROS Noetic (catkin build, pytest, rostest)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Noetic image (catkin build incl. the C++ collision filter)
+        run: docker build -f docker/Dockerfile.noetic -t sem-navae:noetic .
+      - name: pytest in the image
+        run: docker run --rm sem-navae:noetic pytest -q -p no:cacheprovider /sem_navae/tests
+      - name: rostest selection replay
+        run: docker run --rm sem-navae:noetic rostest sem_navae_ros selection_replay.test
