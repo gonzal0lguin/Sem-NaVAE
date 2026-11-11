@@ -1,0 +1,24 @@
+# Trajectory selection (paper Sec. III-B; values from Sec. IV-A).
+# Loaded with sem_navae.selection.load_selection_config; the ROS node reads the same keys
+# under its `selection/` namespace (ros/sem_navae_ros/config/sem_navae.yaml).
+classes:            # CLIPSeg class -> cost C (Eq. 7); prompts are "a photo of a <class>"
+  pavement: 0
+  tree: 3
+  grass: 2
+  wall: 3
+  stairs: 3
+  person: 3
+  hole: 3
+  sky: 4
+prompt_template: "a photo of a {}"
+unknown_cost: 2.0          # C_u
+occlusion_threshold: 2.0   # T_occ: pixels costing more than this count as unknown
+gamma: 0.8                 # discount (Eq. 8)
+alpha1: 2.0                # goal distance weight (Eq. 9)
+alpha2: 0.2                # goal heading weight (Eq. 9)
+epsilon: 0.15              # switching hysteresis; the paper only requires epsilon > 0
+mode: cost_to_go           # cost_to_go (default) | paper | periodic
+min_depth: 0.1             # [m] waypoints closer to the camera plane are not projected
+clipseg_model: CIDAS/clipseg-rd64-refined
+clip_rate_hz: 2.5          # f_clip
+camera_optical_frame: false

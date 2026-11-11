@@ -1,0 +1,81 @@
+model:
+  checkpoint: ''          # path to a sem_navae training checkpoint (.pt)
+  goal_th: 5.0            # [m] goal reached radius
+  localization_mode: "amcl"  # odom | gps | amcl: source of the global pose for the goal input
+  trajectory_gen_period: 2.0  # [s] 1 / f_gen (paper: f_gen = 0.5 Hz)
+  max_wpts: 12
+  n_paths: 200            # K
+  publish_heatmap: true
+
+frames:
+  robot: base_link
+  camera: camera_link     # set selection/camera_optical_frame if this is an optical frame
+  fixed: odom             # the adopted trajectory is stored and dispatched in this frame
+
+local_planner:
+  # Built-in: "move_base" or "null" (log only, for dry runs / bag replay),
+  # or your own adapter as "package.module:ClassName" (see docs/local_planner.md).
+  plugin: "move_base"
+  params:
+    action_ns: "move_base"
+    waypoint_stride: 1    # send every n-th waypoint (the paper's RL planner used 3)
+
+execution:
+  rate_hz: 10.0
+  waypoint_reach_radius: 1.0   # [m]
+  waypoint_timeout: 10.0       # [s] skip a waypoint after this
+  recovery_after_empty_sets: 3 # rotate in place after this many sets without feasible paths
+  recovery_angular_vel: 0.4    # [rad/s]
+  recovery_timeout: 10.0       # [s]
+  joy_override_button: 4
+
+annotation:
+  color: [255, 0, 0]
+  publish_down_cloud: true
+
+topics:
+  ouster:        '/ouster/points'
+  odom:          '/odom'
+  camera_ns:     '/camera'
+  global_goal:   '/sem_navae/global_goal_xy'
+  trajs_out:     '/sem_navae/trajectories'       # generator output (unfiltered)
+  trajs_filt:    '/sem_navae/trajectories_filt'  # after the elevation collision filter
+  selection:     '/sem_navae/selected_traj'
+  done_signal:   '/sem_navae/stop'
+  down_cloud:    '/sem_navae/downsampled_cloud'
+  visualization: '/sem_navae/visualization'
+  annotation:    '/sem_navae/annotated_trajectories'
+
+# Trajectory selection (paper Sec. III-B, values from Sec. IV-A); same keys as
+# configs/selection/default.yaml (sem_navae.selection.SelectionConfig).
+selection:
+  classes:            # CLIPSeg class -> cost; prompts are "a photo of a <class>"
+    pavement: 0
+    tree: 3
+    grass: 2
+    wall: 3
+    stairs: 3
+    person: 3
+    hole: 3
+    sky: 4
+  prompt_template: "a photo of a {}"
+  unknown_cost: 2.0          # C_u
+  occlusion_threshold: 2.0   # T_occ
+  gamma: 0.8
+  alpha1: 2.0
+  alpha2: 0.2
+  epsilon: 0.15              # switching hysteresis
+  mode: cost_to_go           # cost_to_go | paper | periodic
+  min_depth: 0.1
+  clipseg_model: CIDAS/clipseg-rd64-refined
+  clip_rate_hz: 2.5          # f_clip
+  camera_optical_frame: false
+
+# Elevation collision filter (Eq. 6), read by grid_map_collisions as private params.
+elevation_filter:
+  robot_length: 0.65             # [m] footprint d_foot (x)
+  robot_width: 0.65              # [m] footprint (y)
+  collision_angle_th: 10.0       # [deg] theta_max
+  collision_elevation_th: 0.22   # [m] only used with require_min_elevation
+  require_min_elevation: false   # also require max z >= collision_elevation_th (not in Eq. 6)
+  samples_per_segment: 3

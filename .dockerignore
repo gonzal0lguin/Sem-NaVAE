@@ -1,0 +1,9 @@
+.git
+**/__pycache__
+**/*.egg-info
+.ruff_cache
+.pytest_cache
+results
+data
+ros/*/build
+ros/*/devel

@@ -218,3 +218,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Sem-NaVAE ---
+results/
+outputs/
+runs/
+*.pt
+*.pth
+*.pkl
+!tests/data/*.pkl
+# catkin
+devel/
+logs/
+.catkin_tools/

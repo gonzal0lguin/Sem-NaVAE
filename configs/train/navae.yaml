@@ -1,0 +1,67 @@
+# Sem-NaVAE generator training config (paper defaults, Sec. IV-A).
+# Every key is optional; omitted keys take the defaults in sem_navae/config.py.
+# Override from the CLI:  python scripts/train.py -c configs/train/navae.yaml data.root=/path/to/data
+name: navae
+seed: 0
+device: cuda
+model:
+  lidar_num_scans: 3
+  lidar_max_points: 2560
+  lidar_norm_dist: 50.0
+  lidar_voxel_size: 0.08
+  pointnet_weights: null
+  freeze_pointnet: true
+  feature_dim: 256
+  context_dim: 256
+  latent_dim: 512
+  posterior_hidden_dim: 128
+  posterior_mlp_dim: 256
+  prior_hidden_dim: 512
+  use_feature_attention: true
+  past_traj_len: 10
+  num_waypoints: 12
+  dt: 1.0
+  max_vel: 2.0
+  use_heatmap: true
+  use_map_features: true
+  heatmap:
+    size_m: 18.0
+    resolution: 0.2
+    sigma_px: 5.0
+    max_obstacle_height: 1.0
+  max_accel: 0.5
+  min_speed: 0.1
+  max_speed: 2.0
+  max_heading_change_deg: 45.0
+  num_proposals: 20000
+data:
+  root: data
+  index_file: index.pkl
+  split_file: null
+  val_fraction: 0.2
+  batch_size: 16
+  num_workers: 4
+  preload: false
+  goal_norm_dist: 300.0
+  semantic_map_resolution: 0.1
+  semantic_map_half_size_px: 300
+loss:
+  beta_max: 1.0
+  kl_anneal_epochs: 300
+  free_bits: 0.0
+  collision_weight: 10.0
+  collision_sigma_px: 4.0
+  num_prior_samples: 6
+training:
+  max_epochs: 1000
+  max_iterations_per_epoch: null
+  lr: 0.001
+  weight_decay: 0.01
+  lr_decay: 0.95
+  lr_decay_every: 10
+  grad_clip_norm: 10.0
+  eval_every: 10
+  save_every: 40
+  eval_num_samples: 20
+  output_dir: results
+  logger: tensorboard

@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>sem_navae_ros</name>
+  <version>1.0.0</version>
+  <description>
+    ROS 1 (Noetic) nodes for Sem-NaVAE: trajectory generation, elevation-based collision
+    filtering and CLIPSeg-guided trajectory selection. The model and selection logic live
+    in the ROS-free Python package sem_navae (pip install).
+  </description>
+
+  <maintainer email="golguinm@gmail.com">Gonzalo Olguín</maintainer>
+  <license>MIT</license>
+  <url type="repository">https://github.com/gonzal0lguin/Sem-NaVAE</url>
+  <author>Gonzalo Olguín</author>
+  <author>Javier Ruiz-del-Solar</author>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend condition="$ROS_PYTHON_VERSION == 3">python3-setuptools</buildtool_depend>
+
+  <build_depend>message_generation</build_depend>
+  <exec_depend>message_runtime</exec_depend>
+
+  <!-- messages -->
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>actionlib_msgs</exec_depend>
+  <exec_depend>move_base_msgs</exec_depend>
+
+  <!-- C++ collision filter -->
+  <depend>roscpp</depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>grid_map_core</depend>
+  <depend>grid_map_ros</depend>
+  <depend>grid_map_cv</depend>
+  <depend>grid_map_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>eigen</depend>
+
+  <!-- Python nodes -->
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>actionlib</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <!-- sem_navae, torch and transformers are installed with pip (see README). -->
+
+  <!-- elevation.launch -->
+  <exec_depend>elevation_mapping</exec_depend>
+
+  <test_depend>rostest</test_depend>
+
+  <export>
+  </export>
+</package>
