@@ -8,6 +8,7 @@ Gonzalo Olguín, Javier Ruiz-del-Solar · *IEEE Robotics and Automation Letters*
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![ROS Noetic](https://img.shields.io/badge/ROS-Noetic-22314E.svg)](https://wiki.ros.org/noetic)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-3776AB.svg)](pyproject.toml)
+[![DOI](https://img.shields.io/badge/DOI-10.1109%2FLRA.2026.3703234-blue.svg)](https://doi.org/10.1109/LRA.2026.3703234)
 [![arXiv](https://img.shields.io/badge/arXiv-2602.01429-b31b1b.svg)](https://arxiv.org/abs/2602.01429)
 [![Video](https://img.shields.io/badge/video-YouTube-red.svg)](https://youtu.be/i3R5ey5O2yk)
 
@@ -21,7 +22,7 @@ language, and an asynchronous update strategy decides when to switch the traject
 being executed. In real-world outdoor experiments, Sem-NaVAE reaches a 90% success rate on
 120–240 m routes in unseen environments.
 
-🎥 [Video of an experimental run](https://youtu.be/i3R5ey5O2yk) · 📄 [Paper (IEEE Xplore)](https://ieeexplore.ieee.org/document/11560929) · 📝 [arXiv:2602.01429](https://arxiv.org/abs/2602.01429)
+🎥 [Video of an experimental run](https://youtu.be/i3R5ey5O2yk) · 📄 [Paper (IEEE Xplore)](https://doi.org/10.1109/LRA.2026.3703234) · 📝 [arXiv:2602.01429](https://arxiv.org/abs/2602.01429)
 
 > [!WARNING]
 > This repository is a cleaned-up and refactored version of the original research code
@@ -210,6 +211,7 @@ pytest
   number  = {8},
   pages   = {9335--9342},
   month   = aug,
+  doi     = {10.1109/LRA.2026.3703234},
   url     = {https://ieeexplore.ieee.org/document/11560929},
   eprint  = {2602.01429},
   archivePrefix = {arXiv}
