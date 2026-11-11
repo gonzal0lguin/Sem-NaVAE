@@ -8,6 +8,14 @@ model:
   n_paths: 200
   publish_heatmap: true
 
+local_planner:
+  # Built-in: "move_base" or "null" (log only, for dry runs / bag replay),
+  # or your own adapter as "package.module:ClassName" (see docs/local_planner.md).
+  plugin: "move_base"
+  params:
+    action_ns: "move_base"
+    waypoint_stride: 1  # send every n-th waypoint (the paper's RL planner used 3)
+
 annotation:
   annotation_color:    [255, 0, 0]
   publish_downn_cloud: true

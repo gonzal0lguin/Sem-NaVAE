@@ -25,6 +25,9 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
 )
 
+## Python package (src/sem_navae_ros: local planner plugins)
+catkin_python_setup()
+
 
 ################################################
 ## Declare ROS messages, services and actions ##
@@ -59,7 +62,7 @@ generate_messages(
 ###################################
 catkin_package(
 #  INCLUDE_DIRS include
-#  LIBRARIES mtg_ros
+#  LIBRARIES sem_navae_ros
   #  CATKIN_DEPENDS roscpp rospy std_msgs message_runtime nav_msgs
 #  DEPENDS system_lib
 )

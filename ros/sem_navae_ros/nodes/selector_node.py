@@ -6,8 +6,6 @@ import numpy as np
 import cv2
 import torch
 
-from actionlib import SimpleActionClient
-from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from sensor_msgs.msg import Image, Joy, CompressedImage # joy to override commands
 from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
@@ -21,12 +19,10 @@ from message_helpers import (get_camera_params,
                              humanize_costmap,
                              transform_to_frame,
                              transform_and_project_paths,
-                             build_rl_controller_goal,
-                             build_movebase_goal,
                              stop_robot, rotate_in_place)
 
 from sem_navae.utils.geometry import get_path_dist_to_goal, normalize_angle
-from rl_navigation.msg import RLControllerAction
+from sem_navae_ros.local_planners import PlannerStatus, load_local_planner
 
 from typing import Union, List
 
@@ -51,7 +47,8 @@ class TrajectorySelector:
         self._n_paths           = rospy.get_param("model/n_paths", 3)
         self._goal_th           = rospy.get_param("model/goal_th", 4) 
 
-        self._local_planner_type = rospy.get_param("model/local_planner", "rl")
+        self._local_planner_spec   = rospy.get_param("local_planner/plugin", "move_base")
+        self._local_planner_params = rospy.get_param("local_planner/params", {})
 
         self._camera_topic = camera_name + "/camera_info"
         self._image_topic  = camera_name + "/image_raw"  
@@ -122,13 +119,10 @@ class TrajectorySelector:
         self._K, self._img_width, self.img_height = get_camera_params(self._camera_topic)  # Intrinsic matrix
         self.init_selector() 
 
-        if self._local_planner_type == 'rl':
-            self._local_planner_client = SimpleActionClient('RL_navigation_server', RLControllerAction)
-        else: # default to move base
-            self._local_planner_client = SimpleActionClient('move_base', MoveBaseAction)
-
-        self._local_planner_client.wait_for_server(timeout=rospy.Duration(5))
-        rospy.loginfo(f"[Selector]: Using local planner of type: {self._local_planner_type}")
+        self._local_planner = load_local_planner(self._local_planner_spec, self._local_planner_params)
+        if not self._local_planner.wait_until_ready(timeout=5.0):
+            rospy.logwarn(f"[Selector]: local planner '{self._local_planner_spec}' is not ready yet.")
+        rospy.loginfo(f"[Selector]: Using local planner: {self._local_planner_spec}")
         rospy.loginfo("[Selector]: Initialized selector model.")
 
     
@@ -286,9 +280,11 @@ class TrajectorySelector:
 
             paths = paths[best_path_id]
             cost_lst = costs_lst[best_path_id]
-            if self._local_planner_type == 'rl':
-                paths = np.vstack((paths[::3], paths[-1]))
-                cost_lst = np.concatenate((cost_lst[::3], np.array([cost_lst[-1]])))
+            # TODO(R3): subsample only when dispatching to the planner, not in the cost state.
+            stride = self._local_planner.waypoint_stride
+            if stride > 1:
+                paths = np.vstack((paths[::stride], paths[-1]))
+                cost_lst = np.concatenate((cost_lst[::stride], np.array([cost_lst[-1]])))
 
             self._current_trajectory['traj']      = paths
             self._current_trajectory['traj_odom'] = transform_to_frame(self.tf_buffer, paths, "odom", self.robot_frame)
@@ -454,11 +450,7 @@ class TrajectorySelector:
             self._current_wpt = m
             print(f"Current waypoint {m}: {len(T_optim_global_frame)}")
 
-            if self._local_planner_type == 'rl':
-                goal = build_rl_controller_goal(T_optim_odom_frame[m], frame_id=self.global_frame)
-            else:
-                goal = build_movebase_goal(T_optim_odom_frame[m], frame_id=self.global_frame)
-            self._local_planner_client.send_goal(goal)
+            self._local_planner.send_waypoint(T_optim_odom_frame[m], frame_id=self.global_frame)
 
             start_time = rospy.Time.now()
             waypoint_timeout = 10.0
@@ -467,7 +459,7 @@ class TrajectorySelector:
 
                 goal_dst = np.linalg.norm(self._pose_xy - self._global_goal)
                 if goal_dst < self._goal_th:
-                    self._local_planner_client.cancel_all_goals()
+                    self._local_planner.cancel()
                     # self._global_goal = None
                     self._done_signal = True
                     self._done_signal_pub.publish(Empty())
@@ -476,23 +468,29 @@ class TrajectorySelector:
                     self._alignment_cnt = 0
                     return
 
-                if np.linalg.norm(self._pose_xy - current_waypoint) <= 1.0:
+                planner_status = self._local_planner.status()
+                if (np.linalg.norm(self._pose_xy - current_waypoint) <= 1.0
+                        or planner_status == PlannerStatus.SUCCEEDED):
                     rospy.loginfo(f"Waypoint {m} achieved. Moving to next waypoint.")
                     break  # Move to next waypoint
 
+                if planner_status == PlannerStatus.FAILED:
+                    rospy.logwarn(f"Local planner failed on waypoint {m}; skipping it.")
+                    break
+
                 if elapsed_time > waypoint_timeout:
                     rospy.logwarn(f"Skipping waypoint {m} due to timeout.")
-                    self._local_planner_client.cancel_all_goals()
+                    self._local_planner.cancel()
                     break
 
                 if self._update_signal:
                     rospy.logwarn("New trajectory received, stopping current execution.")
-                    self._local_planner_client.cancel_all_goals()
+                    self._local_planner.cancel()
                     self._update_signal = False
                     return  # Stop processing and wait for the new trajectory
                 
                 if self._alignment_cnt >= 3 and np.linalg.norm(self._current_vel) < 0.25: 
-                    self._local_planner_client.cancel_all_goals()
+                    self._local_planner.cancel()
                     self._recovery_signal = True
                     # self._done_signal = True
                     self.reset_trajectories()
@@ -500,7 +498,7 @@ class TrajectorySelector:
                     return
                 
                 if self._joy_override:
-                    self._local_planner_client.cancel_all_goals()
+                    self._local_planner.cancel()
                     return
 
                 rospy.sleep(0.1)
@@ -558,14 +556,3 @@ if __name__ == "__main__":
     while not rospy.is_shutdown():
         projector.run()
         rate.sleep()
-
-    # local_planner_client = SimpleActionClient('move_base', MoveBaseAction)
-    # local_planner_client.wait_for_server(rospy.Duration(2.0))
-    # print('bien')
-    # goal = build_movebase_goal([9, 0], 'map')
-    # print(goal)
-    # print('built')
-    # local_planner_client.send_goal(goal)
-    # print('sent')
-    # res = local_planner_client.wait_for_result()
-    # print('end', res)

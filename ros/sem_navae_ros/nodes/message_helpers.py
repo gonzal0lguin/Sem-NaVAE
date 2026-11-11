@@ -7,72 +7,10 @@ from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from sem_navae_ros.msg import PathArray
 import tf2_ros
 
-from move_base_msgs.msg import MoveBaseGoal
-
-# try:
-from rl_navigation.msg import RLControllerAction, RLControllerGoal
-# except:
-#     print("rl nav package not found, corresponding functions not available.")
 
 from typing import Union, List
 
 import cv2
-
-
-def build_path_message(trajectories, collisions=[], goal=PoseStamped(), past_path=None):
-    path_array_msg = PathArray()     
-    if len(collisions) > 0:   
-        path_array_msg.collisions.data = collisions.astype(np.uint8).flatten().tolist()
-        
-        path_array_msg.collisions.layout.dim.append(MultiArrayDimension(label="height", size=collisions.shape[0], stride=collisions.shape[1]))
-        path_array_msg.collisions.layout.dim.append(MultiArrayDimension(label="width", size=collisions.shape[1], stride=1))
-    else:
-        path_array_msg.collisions.data = collisions
-    path_array_msg.goal = goal
-
-    for traj in trajectories:
-        path_msg = Path()
-        path_msg.header.frame_id = "base_link"
-        path_msg.header.stamp = rospy.Time.now()
-
-        for sub_traj in traj:
-            pose = PoseStamped()
-            pose.header.frame_id = "base_link"
-            pose.pose.position.x = sub_traj[0]
-            pose.pose.position.y = sub_traj[1]
-            pose.pose.orientation.x = 0
-            pose.pose.orientation.y = 0
-            pose.pose.orientation.z = 0
-            pose.pose.orientation.w = 1
-            path_msg.poses.append(pose)
-
-        path_array_msg.paths.append(path_msg)
-
-        return path_array_msg
-
-
-def build_rl_controller_goal(goal: list, frame_id='map') -> RLControllerGoal:
-    goal_msg = RLControllerGoal()
-
-    goal_msg.navigation_target.header.frame_id = frame_id
-    goal_msg.navigation_target.header.stamp = rospy.Time.now()
-    goal_msg.navigation_target.pose.position.x = goal[0]
-    goal_msg.navigation_target.pose.position.y = goal[1]
-    goal_msg.navigation_target.pose.orientation.w = 1.0
-
-    return goal_msg
-
-
-def build_movebase_goal(goal: list, frame_id='map'):
-    goal_msg = MoveBaseGoal()
-
-    goal_msg.target_pose.header.frame_id = frame_id
-    goal_msg.target_pose.header.stamp = rospy.Time.now()
-    goal_msg.target_pose.pose.position.x = goal[0]
-    goal_msg.target_pose.pose.position.y = goal[1]
-    goal_msg.target_pose.pose.orientation.w = 1.0
-
-    return goal_msg
 
 
 ###############################################
