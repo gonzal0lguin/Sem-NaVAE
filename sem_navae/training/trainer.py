@@ -47,11 +47,11 @@ class Trainer:
         self.train_loader, self.val_loader = train_loader, val_loader
         self.model = NaVAE(cfg.model).to(self.device)
         self.loss = NaVAELoss(cfg.loss, cfg.data)
-        # TODO(T5): paper uses AdamW.
         params = [p for p in self.model.parameters() if p.requires_grad]
-        self.optimizer = torch.optim.Adam(
+        self.optimizer = torch.optim.AdamW(
             params, lr=self.tcfg.lr, weight_decay=self.tcfg.weight_decay
         )
+        # Exponential decay applied every ``lr_decay_every`` epochs (paper Sec. IV-A).
         self.scheduler = torch.optim.lr_scheduler.StepLR(
             self.optimizer, self.tcfg.lr_decay_every, gamma=self.tcfg.lr_decay
         )

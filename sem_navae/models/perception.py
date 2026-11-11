@@ -107,13 +107,6 @@ class Perception(nn.Module):
 
     def __init__(self, cfg: ModelConfig):
         super().__init__()
-        if cfg.latent_dim != cfg.context_dim:
-            # TODO(T5): the decoder initialises its hidden state from z with a
-            # (context_dim x context_dim) layer, so both sizes must match until a
-            # z -> hidden projection is added.
-            raise ValueError(
-                f"latent_dim ({cfg.latent_dim}) must equal context_dim ({cfg.context_dim})"
-            )
         self.lidar_enc = LidarEncoder(cfg)
         self.past_traj_enc = TrajectoryEncoder(hidden_dim=64, out_dim=cfg.feature_dim, state_dim=4)
         self.goal_enc = MLP(in_dim=2, hidden_dim=64, out_dim=cfg.feature_dim)

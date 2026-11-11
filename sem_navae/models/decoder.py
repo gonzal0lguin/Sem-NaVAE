@@ -51,8 +51,9 @@ class StochasticDecoder(nn.Module):
         self.map_origin_px = map_origin_px
 
         hidden_dim = context_dim
+        # z -> initial GRU state; latent_dim and context_dim are independent (paper: 512 / 256).
         self.in_fc = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(latent_dim, hidden_dim),
             nn.LeakyReLU(0.2),
             nn.Linear(hidden_dim, hidden_dim),
             nn.LeakyReLU(0.2),
