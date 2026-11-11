@@ -77,7 +77,7 @@ class ModelConfig:
 class DataConfig:
     root: str = "data"
     index_file: str = "index.pkl"
-    split_file: Optional[str] = None  # written on first run if missing
+    split_file: Optional[str] = None  # default <output_dir>/<name>/split.json; created if missing
     val_fraction: float = 0.2
     batch_size: int = 16
     num_workers: int = 4

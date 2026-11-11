@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import random
-from typing import Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -16,6 +17,42 @@ from sem_navae.data.transforms import normalize_lidar, voxelize_with_intensity
 from sem_navae.keys import Keys
 from sem_navae.utils.geometry import normalize_angle
 from sem_navae.utils.io import read_pkl
+
+
+def split_ids(ids: List[str], val_fraction: float, seed: int) -> Dict[str, List[str]]:
+    """Deterministic train/val split of sample ids (a seeded permutation of the sorted ids)."""
+    ordered = sorted(ids)
+    perm = np.random.default_rng(seed).permutation(len(ordered))
+    n_val = int(round(len(ordered) * val_fraction))
+    val = sorted(ordered[i] for i in perm[:n_val])
+    train = sorted(ordered[i] for i in perm[n_val:])
+    return {"seed": seed, "val_fraction": val_fraction, "train": train, "val": val}
+
+
+def default_split_file(cfg: Config) -> str:
+    return os.path.join(cfg.training.output_dir, cfg.name, "split.json")
+
+
+def load_or_create_split(cfg: Config, ids: List[str]) -> Dict[str, List[str]]:
+    """Read ``data.split_file`` (default ``<output_dir>/<name>/split.json``) or create it.
+
+    Train and val datasets read the same file, so the splits never overlap, and a resumed
+    or repeated run reuses exactly the same validation set.
+    """
+    path = cfg.data.split_file or default_split_file(cfg)
+    if os.path.exists(path):
+        with open(path) as f:
+            split = json.load(f)
+        missing = set(split["train"]) | set(split["val"])
+        missing -= set(ids)
+        if missing:
+            raise ValueError(f"{path} lists {len(missing)} samples that are not in the index")
+        return split
+    split = split_ids(ids, cfg.data.val_fraction, cfg.seed)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(split, f, indent=1)
+    return split
 
 
 def _worker_init(worker_id: int) -> None:
@@ -40,13 +77,9 @@ class NaVAEDataset(Dataset):
         self.maps_dir = index["root"][0]
         self.cfg = cfg
 
-        ids = list(index["ids"])
-        # TODO(T8): unseeded shuffle, done separately for train and val -> overlapping splits.
-        random.shuffle(ids)
-        if train:
-            self.ids = ids[: int(len(ids) * (1 - data.val_fraction))]
-        else:
-            self.ids = ids[-int(len(ids) * data.val_fraction) :]
+        by_sample = {sample: (sample, map_file) for sample, map_file in index["ids"]}
+        split = load_or_create_split(cfg, list(by_sample))
+        self.ids = [by_sample[s] for s in split["train" if train else "val"]]
 
         self.cache = None
         if data.preload:
