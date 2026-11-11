@@ -112,4 +112,8 @@ def test_sample_forward(setup):
 
 
 def test_goal_cost():
-    np.testing.assert_allclose(get_path_dist_to_goal(PATHS_FOR_GOAL, GOAL), GOLDEN["goal_cost"])
+    # R4 fix: the heading now uses the direction towards the goal, so |theta| = pi - |legacy|.
+    new = get_path_dist_to_goal(PATHS_FOR_GOAL, GOAL)
+    legacy = GOLDEN["goal_cost"]
+    np.testing.assert_allclose(new[:, 0], legacy[:, 0])
+    np.testing.assert_allclose(np.abs(new[:, 1]), np.pi - np.abs(legacy[:, 1]))
