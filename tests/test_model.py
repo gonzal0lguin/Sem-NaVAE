@@ -25,6 +25,7 @@ def test_default_config_builds_with_paper_dims():
     cfg = small_default_config()
     assert cfg.model.latent_dim == 512 and cfg.model.context_dim == 256
     model = NaVAE(cfg.model).eval()
+    assert model.decoder.heatmap_spec is cfg.model.heatmap  # one spec for builder and decoder
     torch.manual_seed(0)
     batch = to_torch_batch(synthetic_batch(), map_key=Keys.semantic_map)
     out = model.sample_forward(batch, num_samples=4)

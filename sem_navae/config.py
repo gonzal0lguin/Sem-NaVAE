@@ -34,6 +34,11 @@ class HeatmapSpec:
     def size_px(self) -> int:
         return int(round(self.size_m / self.resolution))
 
+    @property
+    def origin_px(self) -> float:
+        """Pixel coordinate of the robot (the map is centred on it)."""
+        return self.size_px / 2.0
+
 
 @dataclass
 class ModelConfig:

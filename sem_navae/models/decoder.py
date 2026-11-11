@@ -9,6 +9,9 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Independent, Normal
 
+from sem_navae.config import HeatmapSpec
+from sem_navae.models.heatmap import metric_to_pixel
+
 
 class StochasticDecoder(nn.Module):
     """GRU decoder that outputs a diagonal Gaussian over the N_w future velocities.
@@ -25,7 +28,7 @@ class StochasticDecoder(nn.Module):
         context_dim: int,
         latent_dim: int,
         steps: int,
-        heatmap_size_px: int,
+        heatmap: HeatmapSpec,
         use_heatmap: bool = True,
         use_map_features: bool = True,
         out_dim: int = 2,
@@ -34,8 +37,6 @@ class StochasticDecoder(nn.Module):
         max_speed: float = 2.0,
         max_accel: float = 0.9,
         max_heading_change: float = torch.pi / 4,
-        map_resolution: float = 0.2,
-        map_origin_px: float = 150.0,
     ):
         super().__init__()
         self.steps = steps
@@ -47,8 +48,7 @@ class StochasticDecoder(nn.Module):
         self.max_speed = max_speed
         self.max_accel = max_accel
         self.max_heading_change = max_heading_change
-        self.map_resolution = map_resolution
-        self.map_origin_px = map_origin_px
+        self.heatmap_spec = heatmap
 
         hidden_dim = context_dim
         # z -> initial GRU state; latent_dim and context_dim are independent (paper: 512 / 256).
@@ -64,7 +64,7 @@ class StochasticDecoder(nn.Module):
         self.fc_logvar = nn.Linear(hidden_dim, out_dim)
 
         if use_map_features:
-            half = heatmap_size_px // 2
+            half = heatmap.size_px // 2
             self.map_enc = nn.Sequential(
                 nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1),
                 nn.MaxPool2d(kernel_size=2, stride=2),
@@ -164,8 +164,7 @@ class StochasticDecoder(nn.Module):
         else:
             position = torch.zeros_like(proposals)
         xy = position + proposals
-        # TODO(T6): pixel mapping is not derived from the heatmap spec.
-        px = (xy / self.map_resolution + self.map_origin_px).long().clip(0, heatmap.shape[-1] - 1)
+        px = metric_to_pixel(xy, self.heatmap_spec).clip(0, heatmap.shape[-1] - 1)
         K, B, _ = px.shape
         batch_idx = torch.arange(B, device=heatmap.device).unsqueeze(0).repeat(K, 1)
         heatmap_mask = heatmap[batch_idx, px[..., 1], px[..., 0]] > 0.0

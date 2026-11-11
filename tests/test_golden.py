@@ -41,11 +41,19 @@ def legacy_config() -> Config:
     return cfg
 
 
+# The legacy code smoothed the heatmap with sigma 5 (forward), 6 (training) and 8 (sampling)
+# and its decoder read the 0.1 m/px map as if it were 0.2 m/px around pixel 150 (T6). The
+# port has one HeatmapSpec; these overrides reproduce the legacy numbers.
+LEGACY_TRAIN_SIGMA, LEGACY_SAMPLE_SIGMA = 6.0, 8.0
+LEGACY_DECODER_SPEC = HeatmapSpec(size_m=60.0, resolution=0.2)  # origin pixel 150
+
+
 @pytest.fixture(scope="module")
 def setup():
     cfg = legacy_config()
     model = NaVAE(cfg.model)
     names = deterministic_init(model)
+    model.decoder.heatmap_spec = LEGACY_DECODER_SPEC
     model.eval()
     arrays = synthetic_batch()
     return cfg, model, names, (lambda: to_torch_batch(arrays, map_key=Keys.semantic_map))
@@ -88,7 +96,9 @@ def test_forward(setup):
 def test_train_forward_and_loss(setup):
     cfg, model, _, batch = setup
     torch.manual_seed(2)
-    out = model.train_multimodal_forward(batch(), num_prior_samples=6)
+    out = model.train_multimodal_forward(
+        batch(), num_prior_samples=6, heatmap_sigma=LEGACY_TRAIN_SIGMA
+    )
     losses = NaVAELoss(cfg.loss, cfg.data).train_loss(out, epoch=30)
     for key, golden in [
         (Keys.nll, "train_nll"),
@@ -107,7 +117,7 @@ def test_train_forward_and_loss(setup):
 def test_sample_forward(setup):
     _, model, _, batch = setup
     torch.manual_seed(3)
-    out = model.sample_forward(batch(), num_samples=3)
+    out = model.sample_forward(batch(), num_samples=3, heatmap_sigma=LEGACY_SAMPLE_SIGMA)
     np.testing.assert_allclose(out[Keys.y_hat].numpy(), GOLDEN["sample_y_hat"], **TOL)
 
 

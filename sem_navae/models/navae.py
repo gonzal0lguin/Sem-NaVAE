@@ -16,13 +16,6 @@ from sem_navae.models.encoders import PosteriorEncoder
 from sem_navae.models.heatmap import traversability_heatmap
 from sem_navae.models.perception import Perception
 
-# TODO(T6): the heatmap smoothing differs between forward (cfg sigma), training and sampling.
-LEGACY_TRAIN_HEATMAP_SIGMA = 6.0
-LEGACY_SAMPLE_HEATMAP_SIGMA = 8.0
-# TODO(T6): decoder pixel mapping, independent of the heatmap spec.
-LEGACY_DECODER_MAP_RESOLUTION = 0.2
-LEGACY_DECODER_MAP_ORIGIN_PX = 150.0
-
 
 def independent_normal(mu: torch.Tensor, std: torch.Tensor, event_dims: int = 1):
     return Independent(Normal(mu, std), event_dims)
@@ -63,7 +56,7 @@ class NaVAE(nn.Module):
             context_dim=cfg.context_dim,
             latent_dim=cfg.latent_dim,
             steps=cfg.num_waypoints,
-            heatmap_size_px=cfg.heatmap.size_px,
+            heatmap=cfg.heatmap,
             use_heatmap=cfg.use_heatmap,
             use_map_features=cfg.use_map_features,
             num_proposals=cfg.num_proposals,
@@ -71,8 +64,6 @@ class NaVAE(nn.Module):
             max_speed=cfg.max_speed,
             max_accel=cfg.max_accel,
             max_heading_change=math.radians(cfg.max_heading_change_deg),
-            map_resolution=LEGACY_DECODER_MAP_RESOLUTION,
-            map_origin_px=LEGACY_DECODER_MAP_ORIGIN_PX,
         )
 
     @property
@@ -87,10 +78,13 @@ class NaVAE(nn.Module):
     def decode(self, h_x, z, heatmap=None, gt=None, current_state=None):
         return self.decoder(h_x, z, heatmap=heatmap, gt=gt, current_state=current_state)
 
-    def heatmap(self, lidar: torch.Tensor, logprobs, labels, sigma: float) -> torch.Tensor:
+    def heatmap(
+        self, lidar: torch.Tensor, logprobs, labels, sigma: Optional[float] = None
+    ) -> torch.Tensor:
+        """I_seg (Eq. 2) with ``cfg.heatmap``; ``sigma`` overrides its smoothing (tests)."""
         points = lidar.reshape(lidar.size(0), -1, lidar.size(-1))
         return traversability_heatmap(
-            points, logprobs, labels, self.cfg.heatmap, sigma, self.cfg.lidar_norm_dist
+            points, logprobs, labels, self.cfg.heatmap, self.cfg.lidar_norm_dist, sigma
         )
 
     @staticmethod
@@ -103,7 +97,7 @@ class NaVAE(nn.Module):
         p_dist = independent_normal(mu_x, torch.exp(logvar_x * 0.5))
         ghm = None
         if self.needs_heatmap:
-            ghm = self.heatmap(batch[Keys.lidar], logprobs, labels, self.cfg.heatmap.sigma_px)
+            ghm = self.heatmap(batch[Keys.lidar], logprobs, labels)
 
         gt_traj = batch[Keys.path][:, :, 2:4]
         mu_y, logvar_y = self.posterior_encoder(h_x, gt_traj, train=train)
@@ -130,7 +124,7 @@ class NaVAE(nn.Module):
         self,
         batch: dict,
         num_prior_samples: int = 6,
-        heatmap_sigma: float = LEGACY_TRAIN_HEATMAP_SIGMA,
+        heatmap_sigma: Optional[float] = None,
     ) -> dict:
         """Training pass with every valid GT per observation (log-mean-exp likelihood, Eq. 4)."""
         h_x, (mu_x, logvar_x), (logprobs, labels) = self.encode(batch, train=True)
@@ -219,8 +213,6 @@ class NaVAE(nn.Module):
 
         Writes ``batch[Keys.y_hat]``: sampled velocities ``(B, K, N_w, 2)``.
         """
-        if heatmap_sigma is None:
-            heatmap_sigma = LEGACY_SAMPLE_HEATMAP_SIGMA
         K = num_samples
         h_x, (mu, logvar), (logprobs, labels) = self.encode(batch)
         B = h_x.size(0)

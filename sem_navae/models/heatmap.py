@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -23,6 +23,15 @@ def gaussian_filter(maps: torch.Tensor, sigma: float) -> torch.Tensor:
     kernel = gaussian_kernel2d(kernel_size, sigma, device=maps.device)
     kernel = kernel.view(1, 1, kernel_size, kernel_size)
     return F.conv2d(maps.unsqueeze(1), kernel, padding=kernel_size // 2).squeeze(1)
+
+
+def metric_to_pixel(xy: torch.Tensor, spec: HeatmapSpec) -> torch.Tensor:
+    """Robot-frame ``[..., (x, y)]`` [m] -> integer ``[..., (col, row)]`` of the heatmap.
+
+    Column = x, row = y, the robot at the map centre. Shared by the heatmap builder and the
+    decoder's constrained sampling so they can never disagree on the metric scale.
+    """
+    return torch.floor(xy / spec.resolution + spec.origin_px).long()
 
 
 def gaussian_heatmap(
@@ -52,8 +61,8 @@ def gaussian_heatmap(
     y_bins = int((ylim[1] - ylim[0]) / res)
     flat_size = x_bins * y_bins
 
-    xi = ((points[..., 0] - xlim[0]) / res).long()
-    yi = ((points[..., 1] - ylim[0]) / res).long()
+    xi = torch.floor((points[..., 0] - xlim[0]) / res).long()
+    yi = torch.floor((points[..., 1] - ylim[0]) / res).long()
     valid = (xi >= 0) & (xi < x_bins) & (yi >= 0) & (yi < y_bins)
 
     flat_idx = yi * x_bins + xi
@@ -108,23 +117,26 @@ def traversability_heatmap(
     logprobs: torch.Tensor,
     labels: torch.Tensor,
     spec: HeatmapSpec,
-    sigma: float,
     lidar_norm_dist: float,
+    sigma: Optional[float] = None,
     penalty: float = 1.0,
 ) -> torch.Tensor:
     """Build I_seg from the PointNet segmentation (Eq. 2).
 
     Traversable points add their probability, non-traversable points below
     ``spec.max_obstacle_height`` subtract theirs; the difference is clipped to [-1, 1].
+    Eq. 2 adds +1 so that I_seg >= 0 with "unknown" at 1; the decoder's ``> 0`` test on
+    this map is the same as ``> 1`` on Eq. 2's.
 
     Args:
         points: ``(B, N, 4)`` normalised LiDAR points (xyz divided by ``lidar_norm_dist``).
         logprobs: ``(B, N, 2)`` per-point log-probabilities (class 0 = traversable).
         labels: ``(B, N)`` argmax labels.
-        spec: map extent / resolution.
-        sigma: Gaussian smoothing std [px].
+        spec: map extent / resolution / smoothing.
+        sigma: override of ``spec.sigma_px`` (tests only).
         lidar_norm_dist: factor that converts normalised xyz back to metres.
     """
+    sigma = spec.sigma_px if sigma is None else sigma
     half = spec.size_m / 2.0
     max_z = spec.max_obstacle_height / lidar_norm_dist
     pos_pts, pos_probs, _ = filter_and_pad_pcl(points, torch.exp(logprobs[:, :, 0]), labels == 0)
