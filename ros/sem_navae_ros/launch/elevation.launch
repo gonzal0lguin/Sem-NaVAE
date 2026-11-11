@@ -10,7 +10,13 @@
         <rosparam command="load" file="$(find sem_navae_ros)/config/postprocessor_pipeline.yaml"/>
     </node>
 
-    <node name="gridmap_image" pkg="sem_navae_ros" type="grid_map_collisions" output="screen"/>
+    <!-- Elevation collision filter (Eq. 6): raw candidates in, filtered candidates out. -->
+    <node name="collision_filter" pkg="sem_navae_ros" type="grid_map_collisions" output="screen">
+        <rosparam command="load" file="$(find sem_navae_ros)/config/sem_navae.yaml"/>
+        <remap from="elevation_map"     to="/elevation_mapping/elevation_map"/>
+        <remap from="trajectories"      to="/sem_navae/trajectories"/>
+        <remap from="trajectories_filt" to="/sem_navae/trajectories_filt"/>
+    </node>
     
 
     <group if="$(arg vis)">

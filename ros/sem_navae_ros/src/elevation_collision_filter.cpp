@@ -20,42 +20,44 @@
 #include <iostream>
 #include <algorithm> 
 
-struct Trajectory {
-  std::vector<float> frozen_costs;  // Cost values for the trajectory
-  float goal_dst;                   // Distance to the goal
-  float cost;                       // Total cost of the trajectory
-  nav_msgs::Path trajectory;
-};
-
-
 class GridMapSubmapNode {
 public:
   GridMapSubmapNode()
     : nh_(),
+      pnh_("~"),
       tfListener_(tfBuffer_),
       it_(nh_)
   {
-    gridMapSub_  = nh_.subscribe("/elevation_mapping/elevation_map", 1, &GridMapSubmapNode::gridMapCallback, this);
-    pathSub_     = nh_.subscribe("/sem_navae/trajectories", 1, &GridMapSubmapNode::pathCallback, this); // unchecked for collisions
-    pathPub_     = nh_.advertise<sem_navae_ros::PathArray>("/sem_navae/trajectories_filt", 1);
-    imagePub_    = it_.advertise("/elevation_image", 1);
-    imgPathsPub_ = it_.advertise("/elevation_image_paths", 1);
+    // Relative names: remap them in the launch file.
+    gridMapSub_  = nh_.subscribe("elevation_map", 1, &GridMapSubmapNode::gridMapCallback, this);
+    pathSub_     = nh_.subscribe("trajectories", 1, &GridMapSubmapNode::pathCallback, this);
+    pathPub_     = nh_.advertise<sem_navae_ros::PathArray>("trajectories_filt", 1);
+    imagePub_    = it_.advertise("elevation_image", 1);
+    imgPathsPub_ = it_.advertise("elevation_image_paths", 1);
 
-    nh_.getParam("elevation_filter/robot_footprint_x", robot_width_);
-    nh_.getParam("elevation_filter/collision_elevation_th", elevation_th_);
-    nh_.getParam("elevation_filter/collision_angle_th", angle_th_);
-    nh_.getParam("elevation_filter/use_odom_frame", use_odom_frame_);
-    nh_.getParam("model/max_wpts", max_wpts_);
-    nh_.getParam("model/n_paths",  n_paths_);
+    getParam("robot_length", robot_length_);
+    getParam("robot_width", robot_width_);
+    getParam("collision_elevation_th", elevation_th_);
+    getParam("collision_angle_th", angle_th_);  // [deg]
+    getParam("require_min_elevation", require_min_elevation_);
+    getParam("samples_per_segment", samples_per_segment_);
+    getParam("use_odom_frame", use_odom_frame_);
+    getParam("layer", layer_);
 
-    angle_th_ = angle_th_ * M_PI / 180;
+    angle_th_ = angle_th_ * M_PI / 180.0;
 
-    ROS_INFO("USING 'robot_footprint': %f", robot_width_);
-    ROS_INFO("USING 'elevation_th': %f", elevation_th_);
-    ROS_INFO("USING 'angle_th': %f", angle_th_);
-    ROS_INFO("USING 'max_wpts': %i", max_wpts_);
-    ROS_INFO("USING 'n_paths': %i", n_paths_);
+    ROS_INFO("[collision filter] footprint %.2f x %.2f m, theta_max %.1f deg, "
+             "min elevation %s (%.2f m), %d samples/segment",
+             robot_length_, robot_width_, angle_th_ * 180.0 / M_PI,
+             require_min_elevation_ ? "on" : "off", elevation_th_, samples_per_segment_);
+  }
 
+  // Reads ~elevation_filter/<key>, falling back to elevation_filter/<key> (global load).
+  template <typename T>
+  void getParam(const std::string& key, T& value)
+  {
+    if (!pnh_.getParam("elevation_filter/" + key, value))
+      nh_.getParam("elevation_filter/" + key, value);
   }
 
   void gridMapCallback(const grid_map_msgs::GridMap& msg) {
@@ -186,12 +188,14 @@ public:
       return;
     
     cv::cvtColor(img_8u, rgb_img, cv::COLOR_GRAY2RGB);
+    // One row per received path, sized from the message (not from parameters).
     std::vector<std::vector<int>> collisions;
-    collisions.resize(n_paths_, std::vector<int>(max_wpts_, 0));
+    collisions.reserve(msg.paths.size());
 
     int p = 0;
     for (auto& path : msg.paths)
     {
+      collisions.emplace_back(path.poses.size(), 0);
       bool collision_found = false;
       size_t collision_index = path.poses.size();  // default: no collision
 
@@ -209,7 +213,7 @@ public:
         double x2 = pose2.position.x;
         double y2 = pose2.position.y;
 
-        int num_samples = 3; // waypoint_dst / robot_lenght ~ 2 or 3
+        const int num_samples = samples_per_segment_;
 
         for (int j = 0; j <= num_samples; ++j) 
         {
@@ -241,25 +245,23 @@ public:
               continue;  // o return
             }
 
+            // Eq. 6: z_i is the max elevation in the footprint around the sample.
             float max_value = layer_data.maxCoeff();
-            
-            // ROS_INFO("Max value in submap: %f", max_value);
-            // float z_world = map_.at(layer_, idx);
-            
-            float angle = std::atan2(max_value - prev_z, std::sqrt(std::pow(x1-x2, 2) + std::pow(y1-y2, 2)));
+            float angle = std::atan2(max_value - prev_z, std::hypot(x2 - x1, y2 - y1));
             prev_z = max_value;
-            
-            // ROS_WARN("ANGLE OF WPT [%i][%i]: %f\nHEIGHTOF WPT: %f", p, i, angle, max_value);
-            
-            if (std::isfinite(max_value) && max_value >= elevation_th_ && angle > angle_th_) {
+
+            // The original code additionally required max_value >= elevation_th (not in
+            // the paper); kept behind require_min_elevation.
+            const bool high_enough = !require_min_elevation_ || max_value >= elevation_th_;
+            if (std::isfinite(max_value) && high_enough && angle > angle_th_) {
               collision_found = true;
               collision_index = i;
               break;
             }
           }
-          catch(...)
+          catch (...)
           {
-            std::cerr << "qe" << '\n';
+            ROS_ERROR_THROTTLE(2.0, "[collision filter] failed to evaluate a waypoint");
           }
         }
       }
@@ -304,7 +306,7 @@ public:
     sensor_msgs::ImagePtr out_msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", rgb_img).toImageMsg();
     out_msg->header.stamp = ros::Time::now();
     out_msg->header.frame_id = "base_link";
-    auto trajs_msg = _build_path_message(msg, collisions, n_paths_, max_wpts_, free_dir);
+    auto trajs_msg = _build_path_message(msg, collisions, free_dir);
 
     pathPub_.publish(trajs_msg);
     imgPathsPub_.publish(out_msg);
@@ -345,7 +347,7 @@ public:
 
 
   sem_navae_ros::PathArray _build_path_message(const sem_navae_ros::PathArray& trajectories_raw,
-                    const std::vector<std::vector<int>>& collisions, int K, int N, const std::vector<float>& free_dir) 
+                    const std::vector<std::vector<int>>& collisions, const std::vector<float>& free_dir)
   {
     sem_navae_ros::PathArray trajectories;
     trajectories.paths = trajectories_raw.paths;
@@ -353,9 +355,10 @@ public:
 
     trajectories.free_dir.data = free_dir;
     trajectories.goal_relative = trajectories_raw.goal_relative;
+    trajectories.past_path = trajectories_raw.past_path;
     
     // Handle collisions data
-    if (collisions.size() > 0) {
+    if (!collisions.empty() && !collisions[0].empty()) {
         std_msgs::UInt8MultiArray collisions_msg;
         
         // Flatten and populate the collision data
@@ -363,7 +366,7 @@ public:
         int N = collisions[0].size();
         collisions_msg.data.resize(K * N);
         for (int i = 0; i < K; ++i) {
-            for (int j = 0; j < N; ++j) {
+            for (int j = 0; j < N && j < static_cast<int>(collisions[i].size()); ++j) {
                 collisions_msg.data[i * N + j] = collisions[i][j];
             }
         }
@@ -387,79 +390,6 @@ public:
     }
 
     return trajectories;
-  }
-
-
-  std::vector<std::vector<int>> _computeCollisions(const sem_navae_ros::PathArray& msg)
-  {
-    std::vector<std::vector<int>> collisions(n_paths_, std::vector<int>(max_wpts_, 0));
-
-    int p = 0;
-    for (const auto& path : msg.paths)
-    {
-      bool collision_found = false;
-      size_t collision_index = path.poses.size();  // default: no collision
-
-      float prev_z = 0.0f;
-      for (size_t i = 3; i < path.poses.size(); ++i)
-      {
-        if (collision_found) break;
-
-        const auto& pose1 = path.poses[i - 1].pose;
-        const auto& pose2 = path.poses[i].pose;
-
-        double x1 = pose1.position.x;
-        double y1 = pose1.position.y;
-        double x2 = pose2.position.x;
-        double y2 = pose2.position.y;
-
-        int num_samples = 3;
-        for (int j = 0; j <= num_samples; ++j)
-        {
-          double t = static_cast<double>(j) / num_samples;
-          double x = x1 + t * (x2 - x1);
-          double y = y1 + t * (y2 - y1);
-
-          grid_map::Position pos(x, y);
-          if (!map_.isInside(pos)) continue;
-
-          grid_map::Length roi_size(robot_length_, robot_width_);
-          grid_map::GridMap map_sub;
-          bool ss;
-
-          try {
-            map_sub = map_.getSubmap(pos, roi_size, ss);
-          } catch (...) {
-            ROS_WARN("Failed to extract submap.");
-            continue;
-          }
-
-          try {
-            Eigen::MatrixXf layer_data = map_sub[layer_];
-            layer_data = layer_data.unaryExpr([](float v) { return std::isfinite(v) ? v : 0.0f; });
-
-            float max_value = layer_data.maxCoeff();
-            float angle = std::atan2(max_value - prev_z, std::hypot(x2 - x1, y2 - y1));
-            prev_z = max_value;
-
-            if (std::isfinite(max_value) && max_value >= elevation_th_ && angle > angle_th_) {
-              collision_found = true;
-              collision_index = i;
-              break;
-            }
-          } catch (...) {
-            ROS_ERROR("Error computing collision");
-          }
-        }
-      }
-
-      for (size_t i = 0; i < path.poses.size(); ++i) {
-        collisions[p][i] = (i < collision_index) ? 0 : 1;
-      }
-      p++;
-    }
-
-    return collisions;
   }
 
 
@@ -526,6 +456,7 @@ public:
 
 private:
   ros::NodeHandle nh_;
+  ros::NodeHandle pnh_;
   ros::Subscriber gridMapSub_;
   ros::Subscriber pathSub_;
   ros::Publisher pathPub_;
@@ -541,13 +472,15 @@ private:
   // cv::Mat img_elvn;
   std::string layer_ = "elevation";
   
-  float robot_width_ = 0.65; // robot width in meters
-  float robot_length_ = 0.65; // robot length in meters
-  float elevation_th_ = 0.22;
-  float angle_th_ = 10.0;
-  int max_wpts_ = 12;
-  int n_paths_ = 3;
-  
+  // Defaults are the values hard-coded in the original code, except require_min_elevation_
+  // (off = Eq. 6 as in the paper). See config/sem_navae.yaml.
+  double robot_width_ = 0.65;   // [m]
+  double robot_length_ = 0.65;  // [m]
+  double elevation_th_ = 0.22;  // [m], only with require_min_elevation_
+  double angle_th_ = 10.0;      // [deg] in the parameter, [rad] after construction
+  bool require_min_elevation_ = false;
+  int samples_per_segment_ = 3;
+
   double sub_map_size_ = 12.0; 
 
   bool use_odom_frame_ = false;
