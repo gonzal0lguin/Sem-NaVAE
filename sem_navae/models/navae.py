@@ -39,6 +39,20 @@ def logmeanexp(x: torch.Tensor, dim: int = -1, keepdim: bool = False) -> torch.T
     return lme if keepdim else lme.squeeze(dim)
 
 
+def prior_log_likelihood(ll: torch.Tensor) -> torch.Tensor:
+    """Prior reconstruction term of Eq. 4 for one observation.
+
+    Args:
+        ll: ``(N, M)`` log p(y^(m) | z_p^(n), x) for N prior samples and M ground truths.
+
+    Returns:
+        ``log mean_n mean_m p(y^(m) | z_p^(n), x)``. With N = 1 this is exactly Eq. 4's
+        ``log (1/M) sum_m p(y^(m) | z_p, x)``; N > 1 averages the likelihood over prior
+        samples inside the log (IWAE-style, ``loss.num_prior_samples``).
+    """
+    return logmeanexp(logmeanexp(ll, dim=1), dim=0)
+
+
 class NaVAE(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
@@ -162,9 +176,7 @@ class NaVAE(nn.Module):
                 2,
             )
             ll_NM = p_hat_NM.log_prob(Yb.unsqueeze(0).expand(N, M_b, -1, -1))
-            # TODO(T3): logmeanexp already subtracts log(M_b).
-            lme_over_M = logmeanexp(ll_NM, dim=1) - math.log(M_b)
-            prior_lme.append(logmeanexp(lme_over_M, dim=0))
+            prior_lme.append(prior_log_likelihood(ll_NM))
             # Positions of every prior mean trajectory, kept in the graph for L_col (Eq. 5).
             prior_means.append(torch.cumsum(loc, dim=1) * self.cfg.dt)
 
@@ -185,8 +197,8 @@ class NaVAE(nn.Module):
             q_hat = self.decode(
                 hx_M, z_q, hm_M, current_state=current[b].unsqueeze(0).expand(M_b, -1)
             )
-            # TODO(T3): Eq. 4 uses a plain expectation over the posterior; also double -log(M_b).
-            post_lme.append(logmeanexp(q_hat.log_prob(Yb), dim=0) - math.log(M_b))
+            # Eq. 4: plain expectation over the posterior (one z_q per ground truth).
+            post_lme.append(q_hat.log_prob(Yb).mean())
             post_means.append(q_hat.base_dist.loc.detach())
 
         ll_prior = torch.stack(prior_lme).mean()

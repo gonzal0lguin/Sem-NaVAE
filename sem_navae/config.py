@@ -94,7 +94,7 @@ class LossConfig:
     free_bits: float = 0.0  # 0 disables free bits
     collision_weight: float = 10.0  # lambda (paper: 10)
     collision_sigma_px: float = 4.0  # GK(.) smoothing of the semantic map
-    num_prior_samples: int = 6  # z_p samples per observation for the LME term
+    num_prior_samples: int = 6  # z_p samples per observation in the prior LME term (1 = Eq. 4)
 
 
 @dataclass

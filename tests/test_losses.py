@@ -60,3 +60,19 @@ def test_output_shape():
     paths = torch.zeros(2, 3, 12, 2)
     maps = torch.cat([obstacle_map(1.0, 1.0)] * 2)
     assert loss_fn().collision_loss(paths, maps).shape == (2, 3)
+
+
+def test_prior_term_does_not_depend_on_the_number_of_identical_ground_truths():
+    # T3: the legacy term subtracted log(M) twice.
+    from sem_navae.models.navae import prior_log_likelihood
+
+    for m in (1, 2, 5):
+        ll = torch.full((1, m), -3.0)
+        assert prior_log_likelihood(ll).item() == pytest.approx(-3.0)
+
+
+def test_prior_term_is_a_soft_best_of_ground_truths():
+    from sem_navae.models.navae import prior_log_likelihood
+
+    ll = torch.tensor([[-1.0, -50.0]])  # one GT explained, one not
+    assert prior_log_likelihood(ll).item() == pytest.approx(-1.0 - torch.log(torch.tensor(2.0)))

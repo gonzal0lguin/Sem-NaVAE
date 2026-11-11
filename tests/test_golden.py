@@ -102,13 +102,15 @@ def test_train_forward_and_loss(setup):
         batch(), num_prior_samples=6, heatmap_sigma=LEGACY_TRAIN_SIGMA
     )
     losses = NaVAELoss(cfg.loss, cfg.data).train_loss(out, epoch=30)
-    for key, golden in [
-        (Keys.nll, "train_nll"),
-        (Keys.ll_prior, "train_ll_prior"),
-        (Keys.ll_posterior, "train_ll_posterior"),
-        (Keys.kl, "train_kl"),
-    ]:
-        np.testing.assert_allclose(out[key].item(), GOLDEN[golden], **TOL)
+    np.testing.assert_allclose(out[Keys.kl].item(), GOLDEN["train_kl"], **TOL)
+    # T3: the legacy prior term subtracted log(M_b) twice; the port's is larger by the
+    # batch mean of log(M_b) (M = 3 and 2 ground truths in the synthetic batch).
+    log_m = np.mean(np.log([3, 2]))
+    np.testing.assert_allclose(out[Keys.ll_prior].item(), GOLDEN["train_ll_prior"] + log_m, **TOL)
+    # T3: the posterior term is a plain expectation (Eq. 4), not a log-mean-exp: no golden.
+    np.testing.assert_allclose(
+        out[Keys.nll].item(), -(out[Keys.ll_prior] + out[Keys.ll_posterior]).item(), **TOL
+    )
     # T1: the legacy collision term saw only the best prior mean, detached; the port keeps
     # every prior mean (B, N, N_w, 2) in the graph. The legacy path must be one of them.
     paths = out[Keys.prior_mean_paths].detach().numpy()
