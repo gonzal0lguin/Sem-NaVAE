@@ -114,7 +114,7 @@ class Trainer:
             out = self.model(batch, num_prior_samples=self.cfg.loss.num_prior_samples)
             stats = release_cuda(self.loss(out, self.epoch))
             samples = self.model.sample_forward(batch, num_samples=self.tcfg.eval_num_samples)
-            positions = samples[Keys.y_hat].cumsum(dim=2)
+            positions = samples[Keys.y_hat].cumsum(dim=2) * self.cfg.model.dt
             stats.update(release_cuda(min_ade_fde(positions, batch[Keys.path][:, :, :2])))
             for k, v in stats.items():
                 sums[k] += float(np.mean(v))

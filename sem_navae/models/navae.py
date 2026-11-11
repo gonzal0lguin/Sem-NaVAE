@@ -102,9 +102,10 @@ class NaVAE(nn.Module):
             points, logprobs, labels, self.cfg.heatmap, self.cfg.lidar_norm_dist, sigma
         )
 
-    @staticmethod
-    def _current_velocity(batch: dict) -> torch.Tensor:
-        return batch[Keys.past_traj][:, -1, 2:4]
+    def _current_velocity(self, batch: dict) -> torch.Tensor:
+        """Current velocity [m/s]: the decoder works in m/s, the past-trajectory input
+        stores velocities divided by ``max_vel``."""
+        return batch[Keys.past_traj][:, -1, 2:4] * self.cfg.max_vel
 
     def forward(
         self,

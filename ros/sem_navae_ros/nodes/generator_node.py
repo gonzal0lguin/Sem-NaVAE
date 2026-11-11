@@ -2,9 +2,10 @@
 """Sem-NaVAE generator: builds the observation (Sec. III-A1) and samples K trajectories.
 
 Inputs are cached by subscribers and consumed by timers, so no callback blocks on
-``wait_for_message``. Frame convention (as in the training data): past positions are
-expressed relative to the current position but *not* rotated into the robot frame;
-the three stacked LiDAR scans are not motion-compensated.
+``wait_for_message``. Frame convention (``docs/dataset_format.md``): every input is in the
+robot frame at the current time; past positions and velocities come from odometry and are
+rotated by the current odometry yaw. The three stacked LiDAR scans are not
+motion-compensated.
 """
 
 from typing import List, Optional, Tuple
@@ -21,26 +22,13 @@ from sensor_msgs.msg import CompressedImage, Image, PointCloud2, PointField
 from std_msgs.msg import Empty, Header
 from tf.transformations import euler_from_quaternion
 
-from sem_navae.data.transforms import voxelize_with_intensity
+from sem_navae.data.transforms import past_trajectory, voxelize_with_intensity
 from sem_navae.inference import Generator
 from sem_navae.keys import Keys
-from sem_navae.utils.geometry import normalize_angle, rotate_pointcloud
+from sem_navae.utils.geometry import normalize_angle
 
 GOAL_RANGE_NORM = 300.0  # [m] the goal distance input is divided by this (as in training)
 POSE_SAMPLE_PERIOD = 0.5  # [s] past trajectory sampling (paper: last 5 s at 0.5 s)
-
-
-def past_trajectory(
-    stamps: np.ndarray, positions: np.ndarray, max_vel: float
-) -> Tuple[np.ndarray, np.ndarray]:
-    """``[x, y, vx, vy]`` of the past poses (dropping the oldest, used only for vx, vy).
-
-    Velocities are finite differences over the actual stamps, normalised by ``max_vel``;
-    positions are relative to the newest one.
-    """
-    vel = np.stack([np.gradient(positions[:, i], stamps) for i in range(2)], -1) / max_vel
-    rel = positions[:, :2] - positions[-1, :2]
-    return np.concatenate([rel[1:], vel[1:]], axis=-1), rel
 
 
 class GeneratorNode:
@@ -61,7 +49,7 @@ class GeneratorNode:
         self._cloud: Optional[PointCloud2] = None
         self._odom: Optional[Odometry] = None
         self._scans: List[np.ndarray] = []
-        self._poses: List[Tuple[float, np.ndarray]] = []  # (stamp [s], xyz)
+        self._poses: List[Tuple[float, np.ndarray, float]] = []  # (stamp [s], xyz, yaw)
         self._goal_msg: Optional[PoseStamped] = None
         self._goal_obs: Optional[np.ndarray] = None
         self._yaw = 0.0
@@ -133,8 +121,9 @@ class GeneratorNode:
         stamp = msg.header.stamp.to_sec()
         if self._poses and stamp <= self._poses[-1][0]:
             return  # no new odometry since the last sample
-        p = msg.pose.pose.position
-        self._poses = (self._poses + [(stamp, np.array([p.x, p.y, 0.0]))])[-self.n_poses :]
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])[-1]
+        self._poses = (self._poses + [(stamp, np.array([p.x, p.y, 0.0]), yaw)])[-self.n_poses :]
 
     def _global_pose_cb(self, msg) -> None:
         pose = msg.pose.pose
@@ -169,9 +158,9 @@ class GeneratorNode:
             or self._goal_obs is None
         ):
             return
-        stamps = np.array([s for s, _ in self._poses])
-        positions = np.stack([p for _, p in self._poses])
-        past, rel = past_trajectory(stamps, positions, self.max_vel)
+        stamps = np.array([s for s, _, _ in self._poses])
+        positions = np.stack([p for _, p, _ in self._poses])
+        past = past_trajectory(stamps, positions, self._poses[-1][2], self.max_vel)
 
         lidar = np.stack(self._scans).astype(np.float32)
         lidar[..., :3] /= self.lidar_norm
@@ -190,9 +179,7 @@ class GeneratorNode:
         msg.goal = self._goal_msg
         msg.goal_relative.data = self._goal_obs.tolist()
         msg.past_path = numpy_to_path(
-            rotate_pointcloud(np.c_[rel[1:], np.zeros(len(rel) - 1)], -self._yaw),
-            self.robot_frame,
-            stamp,
+            np.c_[past[:, :2], np.zeros(len(past))], self.robot_frame, stamp
         )
         self._paths_pub.publish(msg)
 

@@ -33,5 +33,11 @@ def legacy_constrained_sample(self, proposals, pred_tm1, heatmap, mu, preds):
     return torch.where(valid.any(0).unsqueeze(1), best, mu)
 
 
+def legacy_current_velocity(batch):
+    """Legacy decoder initial state (T8b): the *normalised* velocity, used as if in m/s."""
+    return batch["previous_path"][:, -1, 2:4]
+
+
 def apply_legacy_rules(model) -> None:
     model.decoder.constrained_sample = types.MethodType(legacy_constrained_sample, model.decoder)
+    model._current_velocity = legacy_current_velocity

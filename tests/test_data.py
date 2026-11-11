@@ -30,3 +30,18 @@ def test_split_file_is_written_once_and_reused(tmp_path):
     assert load_or_create_split(cfg, IDS) == first
     with pytest.raises(ValueError):
         load_or_create_split(cfg, IDS[:50])
+
+
+def test_past_trajectory_is_in_the_robot_frame():
+    import numpy as np
+
+    from sem_navae.data.transforms import past_trajectory
+
+    # robot driving along world +y at 1 m/s, heading +y (yaw = 90 deg), sampled at 0.5 s
+    stamps = np.arange(5) * 0.5
+    positions = np.stack([np.full(5, 3.0), 10.0 + stamps, np.zeros(5)], -1)
+    past = past_trajectory(stamps, positions, yaw=np.pi / 2, max_vel=2.0)
+    assert past.shape == (4, 4)
+    np.testing.assert_allclose(past[:, 0], [-1.5, -1.0, -0.5, 0.0], atol=1e-9)  # behind
+    np.testing.assert_allclose(past[:, 1], 0.0, atol=1e-9)
+    np.testing.assert_allclose(past[:, 2:], [[0.5, 0.0]] * 4, atol=1e-9)  # forward, /max_vel

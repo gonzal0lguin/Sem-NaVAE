@@ -45,6 +45,7 @@ class Generator:
         out = self.model.sample_forward(
             to_device(observation, self.device), num_samples=num_samples
         )
-        trajs = torch.cumsum(out[Keys.y_hat].squeeze(0), dim=1).cpu().numpy()
+        trajs = torch.cumsum(out[Keys.y_hat].squeeze(0), dim=1) * self.cfg.model.dt
+        trajs = trajs.cpu().numpy()
         ghm = out[Keys.heatmap]
         return trajs, (ghm.squeeze(0).cpu().numpy() if ghm is not None else None)

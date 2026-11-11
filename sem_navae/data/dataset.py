@@ -15,7 +15,6 @@ from sem_navae.config import Config
 from sem_navae.data.collate import collate
 from sem_navae.data.transforms import normalize_lidar, voxelize_with_intensity
 from sem_navae.keys import Keys
-from sem_navae.utils.geometry import normalize_angle
 from sem_navae.utils.io import read_pkl
 
 
@@ -96,10 +95,10 @@ class NaVAEDataset(Dataset):
             read_pkl(os.path.join(self.root, self.samples_dir, self.ids[i][0])), i
         )
 
-    def _local_goal(self, goal: np.ndarray, pose: np.ndarray) -> np.ndarray:
-        rho = np.linalg.norm(goal) / self.cfg.data.goal_norm_dist
-        # TODO(T8b): the goal is stored in the robot frame, yet the pose yaw is subtracted.
-        theta = normalize_angle(np.arctan2(goal[1], goal[0]) - pose[-1]) / np.pi
+    def _goal_input(self, goal: np.ndarray) -> np.ndarray:
+        """Polar goal input ``[rho / goal_norm_dist, theta / pi]`` from the robot-frame goal."""
+        rho = np.linalg.norm(goal[:2]) / self.cfg.data.goal_norm_dist
+        theta = np.arctan2(goal[1], goal[0]) / np.pi
         return np.array([rho, theta])
 
     def _crop_map(self, semantic_map: np.ndarray) -> np.ndarray:
@@ -111,8 +110,11 @@ class NaVAEDataset(Dataset):
         m = self.cfg.model
         path = meta["path"][: min(m.num_waypoints, len(meta["path"]))][:, :4]
         sample = {Keys.path: path, Keys.pose: meta["pose"]}
-        if "all_paths" in meta:
-            sample[Keys.all_paths] = meta["all_paths"]
+        # Every valid ground truth for this observation (Eq. 4); at least the main one.
+        all_paths = meta.get("all_paths")
+        if all_paths is None or len(all_paths) == 0:
+            all_paths = [path]
+        sample[Keys.all_paths] = [np.asarray(p)[: m.num_waypoints, :4] for p in all_paths]
 
         if meta.get("lidar_dn") is not None:
             scans = np.array(meta["lidar_dn"], dtype=np.float32)
@@ -124,10 +126,13 @@ class NaVAEDataset(Dataset):
                 ]
             )
         sample[Keys.lidar] = normalize_lidar(scans, m.lidar_norm_dist)
-        sample[Keys.goal] = self._local_goal(meta["goal"], meta["pose"])
+        sample[Keys.goal] = self._goal_input(meta["goal"])
 
-        # TODO(T8b): past_traj_len is ignored; only past velocities are normalised by max_vel.
-        past = np.array(meta["previous_path"][:, :4], dtype=np.float64)
+        # Last N_v past states; velocities are divided by max_vel (the only normalised
+        # quantity: positions stay in metres, GT and decoder velocities in m/s).
+        past = np.array(meta["previous_path"][-m.past_traj_len :, :4], dtype=np.float64)
+        if len(past) != m.past_traj_len:
+            raise ValueError(f"previous_path has {len(past)} states, need {m.past_traj_len}")
         past[:, 2:] = past[:, 2:] / m.max_vel
         sample[Keys.past_traj] = past
         sample[Keys.semantic_map] = self._crop_map(meta["local_map"])

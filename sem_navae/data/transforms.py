@@ -27,3 +27,20 @@ def normalize_lidar(scans: np.ndarray, norm_dist: float) -> np.ndarray:
     scans[..., :3] = scans[..., :3] / norm_dist
     scans[..., 3] = (scans[..., 3] - scans[..., 3].mean()) / (scans[..., 3].std() + 1e-6)
     return scans
+
+
+def past_trajectory(
+    stamps: np.ndarray, positions: np.ndarray, yaw: float, max_vel: float
+) -> np.ndarray:
+    """``[x, y, vx, vy]`` of the past poses in the current robot frame.
+
+    The oldest pose is dropped (it only serves the finite differences). Velocities are
+    differences over the actual stamps, divided by ``max_vel``; positions are relative to
+    the newest one; both are rotated by ``-yaw`` (odometry yaw of the newest pose).
+    """
+    vel = np.stack([np.gradient(positions[:, i], stamps) for i in range(2)], -1)
+    rel = positions[:, :2] - positions[-1, :2]
+    c, s = np.cos(yaw), np.sin(yaw)
+    world_to_robot = np.array([[c, s], [-s, c]])
+    rel, vel = rel @ world_to_robot.T, vel @ world_to_robot.T / max_vel
+    return np.concatenate([rel[1:], vel[1:]], axis=-1)
