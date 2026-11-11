@@ -1,7 +1,8 @@
 """Record legacy NaVAE outputs for the parity tests (run once; not part of the test suite).
 
 Usage:
-    python tests/golden/generate_from_legacy.py /path/to/NaVAE /path/to/Pointnet_Pointnet2_Pytorch
+    python tests/golden/generate_from_legacy.py /path/to/original_code \
+        /path/to/Pointnet_Pointnet2_Pytorch
 
 Writes ``tests/golden/legacy_model.npz``.
 """

@@ -2,12 +2,13 @@
 
 **Semantically-Guided Outdoor Mapless Navigation via Generative Trajectory Priors**
 
-Gonzalo Olguín, Javier Ruiz-del-Solar · *IEEE Robotics and Automation Letters*, 2026
+Gonzalo Olguín, Javier Ruiz-del-Solar · *IEEE Robotics and Automation Letters*, vol. 11, no. 8, pp. 9335–9342, Aug. 2026
 
 [![CI](https://github.com/gonzal0lguin/Sem-NaVAE/actions/workflows/ci.yml/badge.svg)](https://github.com/gonzal0lguin/Sem-NaVAE/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![ROS Noetic](https://img.shields.io/badge/ROS-Noetic-22314E.svg)](https://wiki.ros.org/noetic)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-3776AB.svg)](pyproject.toml)
+[![arXiv](https://img.shields.io/badge/arXiv-2602.01429-b31b1b.svg)](https://arxiv.org/abs/2602.01429)
 [![Video](https://img.shields.io/badge/video-YouTube-red.svg)](https://youtu.be/i3R5ey5O2yk)
 
 ![Sem-NaVAE running outdoors](docs/img/hero.jpg)
@@ -20,15 +21,14 @@ language, and an asynchronous update strategy decides when to switch the traject
 being executed. In real-world outdoor experiments, Sem-NaVAE reaches a 90% success rate on
 120–240 m routes in unseen environments.
 
-🎥 [Video of an experimental run](https://youtu.be/i3R5ey5O2yk) · 📄 Paper: *link to be added on publication*
+🎥 [Video of an experimental run](https://youtu.be/i3R5ey5O2yk) · 📄 [Paper (IEEE Xplore)](https://ieeexplore.ieee.org/document/11560929) · 📝 [arXiv:2602.01429](https://arxiv.org/abs/2602.01429)
 
 > [!WARNING]
 > This repository is a cleaned-up and refactored version of the original research code
 > used for the paper. The cleanup, refactoring and documentation were done with AI
 > assistance (Claude Code) and reviewed by the author. **This version has not been tested
 > on a real robot.** The results reported in the paper were obtained with the original
-> code ([gonzal0lguin/NaVAE](https://github.com/gonzal0lguin/NaVAE)). The proprietary RL
-> local planner used in the experiments is not included. **No pre-trained weights or
+> research code, which is not public. The proprietary RL local planner used in the experiments is not included. **No pre-trained weights or
 > datasets are released**: you need to train the models on your own data. Use at your own
 > risk.
 
@@ -53,20 +53,21 @@ being executed. In real-world outdoor experiments, Sem-NaVAE reaches a 90% succe
 
 ![NaVAE architecture](docs/img/architecture.png)
 
-| Trajectory projection | Changing the class costs changes the selected route |
-|---|---|
-| ![Camera projection](docs/img/camera-projection.png) | ![Costs](docs/img/costs.jpg) |
-
 <details>
 <summary>Results from the paper</summary>
 
 ![Comparison with baselines](docs/img/baselines.jpg)
 
-| Grass cost variation | Sand cost variation |
-|---|---|
-| ![Grass](docs/img/selvar-grass.jpg) | ![Sand](docs/img/selvar-sand.jpg) |
-
-![Long run in a park](docs/img/park-run.jpg)
+<table>
+  <tr>
+    <th>Costs variation</th>
+    <th>Long run in a park</th>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/img/costs.jpg" alt="Changing the class costs changes the selected route" width="100%"></td>
+    <td width="50%"><img src="docs/img/park-run.jpg" alt="Long run in a park" width="100%"></td>
+  </tr>
+</table>
 
 </details>
 
@@ -204,7 +205,14 @@ pytest
   author  = {Olgu{\'\i}n, Gonzalo and Ruiz-del-Solar, Javier},
   title   = {Sem-NaVAE: Semantically-Guided Outdoor Mapless Navigation via Generative Trajectory Priors},
   journal = {IEEE Robotics and Automation Letters},
-  year    = {2026}
+  year    = {2026},
+  volume  = {11},
+  number  = {8},
+  pages   = {9335--9342},
+  month   = aug,
+  url     = {https://ieeexplore.ieee.org/document/11560929},
+  eprint  = {2602.01429},
+  archivePrefix = {arXiv}
 }
 ```
 

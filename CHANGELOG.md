@@ -1,9 +1,9 @@
 # Changelog
 
-## [1.0.0] — unreleased
+## [1.0.0] — 2026-11-11
 
 First public release of the Sem-NaVAE code: a cleaned-up and refactored version of the
-original research code ([gonzal0lguin/NaVAE](https://github.com/gonzal0lguin/NaVAE)).
+original research code used for the paper.
 Code only: no pre-trained weights or datasets are included.
 
 ### Added

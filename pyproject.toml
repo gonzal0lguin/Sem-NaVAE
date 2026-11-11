@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sem-navae"
-version = "1.0.0.dev0"
+version = "1.0.0"
 description = "Sem-NaVAE: semantically-guided outdoor mapless navigation via generative trajectory priors"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -29,6 +29,8 @@ dev = ["pytest>=7", "ruff>=0.4", "pre-commit>=3"]
 
 [project.urls]
 Homepage = "https://github.com/gonzal0lguin/Sem-NaVAE"
+Paper = "https://ieeexplore.ieee.org/document/11560929"
+arXiv = "https://arxiv.org/abs/2602.01429"
 Video = "https://youtu.be/i3R5ey5O2yk"
 
 [tool.setuptools.packages.find]

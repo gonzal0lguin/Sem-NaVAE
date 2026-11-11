@@ -1,7 +1,7 @@
 """Record the legacy selector cost (``_calculate_path_cost_full``) for the parity tests.
 
 Usage:
-    python tests/golden/generate_selection_from_legacy.py /path/to/NaVAE
+    python tests/golden/generate_selection_from_legacy.py /path/to/original_code
 
 ROS modules are replaced by stubs and tf2 by a fixed lookup table, so no ROS install is
 needed. Writes ``tests/golden/legacy_selection.npz``.
