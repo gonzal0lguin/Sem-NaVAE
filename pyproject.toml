@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sem-navae"
+version = "1.0.0.dev0"
+description = "Sem-NaVAE: semantically-guided outdoor mapless navigation via generative trajectory priors"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Gonzalo Olguín" }, { name = "Javier Ruiz-del-Solar" }]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.20",
+    "torch>=1.12",
+    "pyyaml>=5.3",
+    "opencv-python-headless>=4.2",
+]
+
+[project.optional-dependencies]
+train = ["tensorboard>=2.8", "tqdm>=4.60"]
+selection = ["transformers>=4.30", "pillow>=8.0"]
+dev = ["pytest>=7", "ruff>=0.4", "pre-commit>=3"]
+
+[project.urls]
+Homepage = "https://github.com/gonzal0lguin/Sem-NaVAE"
+Video = "https://youtu.be/i3R5ey5O2yk"
+
+[tool.setuptools.packages.find]
+include = ["sem_navae*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+extend-exclude = ["ros/*/build", "ros/*/devel"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY"]
+# UP006/UP007/UP045: keep typing.Optional/List/Dict for Python 3.8 (ROS Noetic) compatibility.
+ignore = ["E741", "UP006", "UP007", "UP045"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
