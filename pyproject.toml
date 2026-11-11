@@ -37,8 +37,8 @@ include = ["sem_navae*"]
 [tool.ruff]
 line-length = 100
 target-version = "py38"
-# The legacy ROS nodes are rewritten as thin wrappers in Phase 4; lint them then.
-extend-exclude = ["ros/*/build", "ros/*/devel", "ros/sem_navae_ros/nodes"]
+# Not yet rewritten (generator: R8, Phase 4).
+extend-exclude = ["ros/*/build", "ros/*/devel", "ros/sem_navae_ros/nodes/generator_node.py", "ros/sem_navae_ros/nodes/tf_to_pose_publisher.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "NPY"]

@@ -1,558 +1,313 @@
 #!/usr/bin/env python3
+"""Sem-NaVAE trajectory selector: ROS I/O around ``sem_navae.selection.SelectionCore``.
 
+* Camera images are segmented with CLIPSeg at ``f_clip``; every new cost map re-scores the
+  executing trajectory (Sec. III-B4).
+* Every collision-filtered candidate set (``f_gen``) is scored with Eqs. 8-10 and may
+  replace the executing trajectory (hysteresis ``epsilon``).
+* The adopted trajectory is stored in ``fixed_frame`` with the transform at the candidates'
+  stamp, then dispatched waypoint by waypoint to the local planner plugin.
+
+All decision logic lives in ``sem_navae.selection`` and is unit-tested without ROS.
+"""
+
+import threading
+from typing import Optional
+
+import numpy as np
 import rospy
 import tf2_ros
-import numpy as np
-import cv2
-import torch
-
-from sensor_msgs.msg import Image, Joy, CompressedImage # joy to override commands
-from tf.transformations import euler_from_quaternion
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
-from std_msgs.msg import Empty, Float32
-from nav_msgs.msg import Path, Odometry
-from sem_navae_ros.msg import PathArray # , Debug
-from message_helpers import (get_camera_params,
-                             annotate_costmap, 
-                             imgmsg_to_cv2, 
-                             cv2_to_imgmsg, 
-                             humanize_costmap,
-                             transform_to_frame,
-                             transform_and_project_paths,
-                             stop_robot, rotate_in_place)
-
-from sem_navae.utils.geometry import get_path_dist_to_goal, normalize_angle
+from geometry_msgs.msg import Twist
+from message_helpers import (
+    camera_params,
+    collisions_from_msg,
+    colorize_labels,
+    cv2_to_imgmsg,
+    dispatch_indices,
+    draw_paths,
+    imgmsg_to_rgb,
+    lookup,
+    numpy_to_path,
+    param,
+    patharray_to_numpy,
+    rotate_in_place,
+    stop_robot,
+)
+from nav_msgs.msg import Odometry, Path
 from sem_navae_ros.local_planners import PlannerStatus, load_local_planner
+from sem_navae_ros.msg import PathArray
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Joy
+from std_msgs.msg import Empty, Float32
 
-from typing import Union, List
+from sem_navae.selection import SelectionCore, project_to_image, selection_config_from_dict
+from sem_navae.selection.clipseg_costmap import ClipSegCostmapper
 
 
-class TrajectorySelector:
+class SelectorNode:
     def __init__(self):
+        self.cfg = selection_config_from_dict(param("selection", {}))
+        self.robot_frame = param("frames/robot", "base_link")
+        self.camera_frame = param("frames/camera", "camera_link")
+        self.fixed_frame = param("frames/fixed", "odom")
+        self.goal_th = float(param("model/goal_th", 5.0))
+        self.reach_radius = float(param("execution/waypoint_reach_radius", 1.0))
+        self.waypoint_timeout = float(param("execution/waypoint_timeout", 10.0))
+        self.recovery_after = int(param("execution/recovery_after_empty_sets", 3))
+        self.recovery_speed = float(param("execution/recovery_angular_vel", 0.4))
+        self.recovery_timeout = float(param("execution/recovery_timeout", 10.0))
+        self.joy_button = int(param("execution/joy_override_button", 4))
 
-        # TODO: make a better initialization
-        camera_name           = rospy.get_param('topics/camera_ns', "camera")
-        self.trajs_topic      = rospy.get_param("topics/trajs_filt",    "/sem_navae/trajectories_filt")
-        self.marker_topic     = rospy.get_param("topics/visualization", "/sem_navae/visualization")
-        self.annotation_topic = rospy.get_param("topics/annotation",    "/sem_navae/annotated_trajectories")
-        self.imgarray_topic   = rospy.get_param("topics/img_array",     "/sem_navae/image_array")
-        self.done_sig_topic   = rospy.get_param("topics/done_signal",   "/sem_navae/stop")
-        self.costmap_topic    = rospy.get_param("topics/costmap",       "/sem_navae/costmap")
-        self.selection_topic  = rospy.get_param("topics/selection",     "/sem_navae/selected_traj")
-        self.odom_topic       = rospy.get_param("topics/odom",          "/odom")
-        self.gps_topic        = rospy.get_param("topics/gps",          "/odometry/gps")
-        
-        self._localization_mode = rospy.get_param("model/localization_mode", "odom")
-        self._max_wpts          = rospy.get_param("model/max_wpts", 12)
-        self._n_paths           = rospy.get_param("model/n_paths", 3)
-        self._goal_th           = rospy.get_param("model/goal_th", 4) 
-
-        self._local_planner_spec   = rospy.get_param("local_planner/plugin", "move_base")
-        self._local_planner_params = rospy.get_param("local_planner/params", {})
-
-        self._camera_topic = camera_name + "/camera_info"
-        self._image_topic  = camera_name + "/image_raw"  
-
-        self._global_goal = None
-        self._local_goal  = None
-
-        self._update_strat = rospy.get_param("~selection/strategy", 'barebones')
-        self._gamma  = rospy.get_param("~selection/discount_factor", 0.9)
-        self._beta   = rospy.get_param("~selection/goal_dst_w", 0.02)
-        self._beta2  = rospy.get_param("~selection/goal_angle_w", 0.5)
-        self._delta  = rospy.get_param("~selection/collisions_w", 1)
-        self.improvement_eps  = rospy.get_param("~selection/improvement_eps", 0.5)
-
-        constraints = rospy.get_param("~selection/constraints") #["a paved road", "trees", "grass", "sky", "wall", "stair", "person", "hole"]
-        self.C_unk  = rospy.get_param("~selection/unknown_cost", 1)
-
-        self._constraints = list(constraints.keys())
-        self._costs = np.array(list(constraints.values())) #np.array([0, 10, 3, 30, 20, 15, 40, 6])
-        
+        self._lock = threading.Lock()
+        self._image_msg: Optional[Image] = None
+        self._image_new = False
+        self._goal_fixed: Optional[np.ndarray] = None  # goal (x, y) in the fixed frame
+        self._goal_key: Optional[np.ndarray] = None  # goal as received, to detect changes
+        self._done = True
+        self._speed = 0.0
         self._joy_override = False
-        self._ignore_semantics = False
-        self._current_trajectory = {}
-        self._current_wpt = 0
-        self._current_free_dir = -1
-        self._done_signal = True
-        self._recovery_signal = False
-        self._last_cost   = np.infty
-        self._alignment_cnt = 0
-        self.start = True
-        self.robot_frame  = "base_link"
-        self.global_frame = "map" if self._localization_mode == "amcl" else "odom"
-
-        self._current_vel = None
-        self._last_vel_stamp = 0
-        self._pose_xy = np.zeros(2)
+        self._empty_sets = 0
+        self._free_dirs = [-1.0]
+        self._goal_bearing = 0.0  # goal direction in the robot frame at the last set
+        self._new_trajectory = False
+        self._dispatch = []  # waypoint indices still to send
+        self._sent_at: Optional[rospy.Time] = None
+        self._recovery_until: Optional[rospy.Time] = None
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
-        # NOTE: queue of 1 important to process the latest and not the queued! clip runs at less than 30Hz
-        self._traj_sub        = rospy.Subscriber(self.trajs_topic, PathArray, self._waypoint_callback)
-        self._joy_sub         = rospy.Subscriber('/joy', Joy, self._joy_cb) # just to avoid inminent crashes or disble motors
+        camera_ns = param("topics/camera_ns", "camera")
+        info = rospy.wait_for_message(camera_ns + "/camera_info", CameraInfo, timeout=30.0)
+        K, image_size = camera_params(info)
+        self.core = SelectionCore(self.cfg, K, image_size)
+        self.costmapper = ClipSegCostmapper(
+            self.cfg.classes, self.cfg.prompt_template, self.cfg.clipseg_model
+        )
 
-        self._costmap_pub        = rospy.Publisher(self.costmap_topic, Image, queue_size=1)
-        self._pathon_costmap_pub = rospy.Publisher('/sem_navae/path_on_costmap', Image, queue_size=1)
-        self._costmapcmp_pub        = rospy.Publisher(self.costmap_topic+'/compressed', CompressedImage, queue_size=1)
-        self._pathon_costmapcmp_pub = rospy.Publisher('/sem_navae/path_on_costmap/compressed', CompressedImage, queue_size=1)
+        spec = param("local_planner/plugin", "move_base")
+        self.planner = load_local_planner(spec, param("local_planner/params", {}))
+        if not self.planner.wait_until_ready(timeout=5.0):
+            rospy.logwarn(f"[selector] local planner '{spec}' is not ready yet")
 
-        self._selected_traj_pub  = rospy.Publisher(self.selection_topic, Path, queue_size=1)
+        self._costmap_pub = rospy.Publisher("~costmap", Image, queue_size=1)
+        self._costmap_cmp_pub = rospy.Publisher(
+            "~costmap/compressed", CompressedImage, queue_size=1
+        )
+        self._annot_pub = rospy.Publisher("~path_on_costmap", Image, queue_size=1)
+        self._annot_cmp_pub = rospy.Publisher(
+            "~path_on_costmap/compressed", CompressedImage, queue_size=1
+        )
+        self._selected_pub = rospy.Publisher(
+            param("topics/selection", "/sem_navae/selected_traj"), Path, queue_size=1, latch=True
+        )
+        self._current_cost_pub = rospy.Publisher("~current_cost", Float32, queue_size=1)
+        self._best_cost_pub = rospy.Publisher("~best_candidate_cost", Float32, queue_size=1)
+        self._done_pub = rospy.Publisher(
+            param("topics/done_signal", "/sem_navae/stop"), Empty, queue_size=1
+        )
+        self._cmd_vel_pub = rospy.Publisher(
+            param("topics/cmd_vel", "/cmd_vel"), Twist, queue_size=1
+        )
 
-        self._rcost_pub       = rospy.Publisher("tmp/running_cost", Float32, queue_size=1)
-        self._acost_pub       = rospy.Publisher("tmp/actual_min_cost", Float32, queue_size=1)
-        # self._ntrajs_debug    = rospy.Publisher("tmp/new_debug", Debug, queue_size=1)
-        # self._ctrajs_debug    = rospy.Publisher("tmp/curr_debug", Debug, queue_size=1)
-        self._done_signal_pub  = rospy.Publisher(self.done_sig_topic, Empty, queue_size=1)
-        self._cmd_vel_pub      = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+        rospy.Subscriber(
+            camera_ns + "/image_raw", Image, self._image_cb, queue_size=1, buff_size=2**24
+        )
+        rospy.Subscriber(
+            param("topics/trajs_filt", "/sem_navae/trajectories_filt"),
+            PathArray,
+            self._candidates_cb,
+            queue_size=1,
+        )
+        rospy.Subscriber(param("topics/odom", "/odom"), Odometry, self._odom_cb, queue_size=1)
+        rospy.Subscriber(param("topics/joy", "/joy"), Joy, self._joy_cb, queue_size=1)
+        rospy.Timer(rospy.Duration(1.0 / self.cfg.clip_rate_hz), self._costmap_timer)
+        rospy.loginfo(f"[selector] mode={self.cfg.mode}, planner={spec}, fixed={self.fixed_frame}")
 
-        if self._localization_mode == "gps":
-            self._gps_sub = rospy.Subscriber(self.gps_topic, Odometry, self._global_pos_cb)
-        elif self._localization_mode == "amcl":
-            self._gps_sub = rospy.Subscriber("/amcl_pose", PoseWithCovarianceStamped, self._global_pos_cb)
-        elif self._localization_mode == "odom":
-            self._odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self._global_pos_cb)
+    # ----------------------------------------------------------------- inputs
+    def _image_cb(self, msg: Image) -> None:
+        self._image_msg, self._image_new = msg, True
 
-        self._odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self._vel_cb)
+    def _odom_cb(self, msg: Odometry) -> None:
+        self._speed = float(np.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y))
 
-        self._K, self._img_width, self.img_height = get_camera_params(self._camera_topic)  # Intrinsic matrix
-        self.init_selector() 
+    def _joy_cb(self, msg: Joy) -> None:
+        self._joy_override = len(msg.buttons) > self.joy_button and bool(
+            msg.buttons[self.joy_button]
+        )
 
-        self._local_planner = load_local_planner(self._local_planner_spec, self._local_planner_params)
-        if not self._local_planner.wait_until_ready(timeout=5.0):
-            rospy.logwarn(f"[Selector]: local planner '{self._local_planner_spec}' is not ready yet.")
-        rospy.loginfo(f"[Selector]: Using local planner: {self._local_planner_spec}")
-        rospy.loginfo("[Selector]: Initialized selector model.")
+    def _costmap_timer(self, _event) -> None:
+        if not self._image_new:
+            return
+        msg, self._image_new = self._image_msg, False
+        rgb = imgmsg_to_rgb(msg)
+        costmap = self.costmapper(rgb)
+        cam_from_fixed = lookup(
+            self.tf_buffer, self.camera_frame, self.fixed_frame, msg.header.stamp
+        )
+        with self._lock:
+            cost = self.core.on_costmap(costmap, cam_from_fixed)
+            waypoints = self.core.current_waypoints
+        if cost is not None:
+            self._current_cost_pub.publish(Float32(data=cost))
+        self._publish_costmap(costmap, waypoints, cam_from_fixed, msg.header.stamp)
 
-    
-    def init_selector(self):
-        if 'clip' in self._update_strat:
-            from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
-            self._clip_processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
-            self._clip_model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
-            self._clip_model.to(torch.device('cuda'))
-            self._clip_model.eval()
-            rospy.sleep(5) # time to init the model
+    def _candidates_cb(self, msg: PathArray) -> None:
+        if not msg.paths:
+            return
+        stamp = msg.paths[0].header.stamp
+        paths = patharray_to_numpy(msg)
+        feasible = ~collisions_from_msg(msg, paths.shape[:2]).any(axis=1)
+        self._free_dirs = list(msg.free_dir.data) or [-1.0]
 
-            rospy.Timer(rospy.Duration(0.4), self._fpvimg_cb) # 2.5Hz 
-            if self._update_strat == 'clip_running_cost':
-                self._perform_trajectory_update = self._perform_clip_update
-            if self._update_strat == 'clip_periodic_cost':
-                self._perform_trajectory_update = self._perform_periodic_update
+        goal_frame = msg.goal.header.frame_id or self.fixed_frame
+        goal_xyz = np.array([msg.goal.pose.position.x, msg.goal.pose.position.y, 0.0])
+        robot_from_goal = lookup(self.tf_buffer, self.robot_frame, goal_frame, stamp)
+        fixed_from_robot = lookup(self.tf_buffer, self.fixed_frame, self.robot_frame, stamp)
+        cam_from_robot = lookup(self.tf_buffer, self.camera_frame, self.robot_frame, stamp)
+        if robot_from_goal is None or fixed_from_robot is None or cam_from_robot is None:
+            return
+        goal_robot = robot_from_goal.apply(goal_xyz)[:2]
+        self._goal_bearing = float(np.arctan2(goal_robot[1], goal_robot[0]))
 
-        elif self._update_strat == 'barebones':
-            # This method just deletes the paths that have collisions and chooses the closest to the goal.
-            self._perform_trajectory_update = self._perform_barebones_update
-
-        else:
-            raise NotImplementedError(f"Update strategy {self._update_strat} not implemented.")
-
-
-    def _joy_cb(self, msg: Joy):
-        if msg.buttons[4]:
-            self._joy_override = True
-        else:
-            self._joy_override = False
-
-
-    def _vel_cb(self, msg: Odometry):
-        self._current_vel = np.array([msg.twist.twist.linear.x, msg.twist.twist.linear.y])
-
-
-    def _global_pos_cb(self, msg: Union[Odometry, PoseWithCovarianceStamped]) -> None:
-        self._odom_pose = msg.pose.pose
-        # self._last_pose_xy = self._pose_xy.copy() 
-        self._pose_xy = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y])
-
-        # self._current_vel = (self._pose_xy - self._last_pose_xy) / (msg.header.stamp.secs / 1e9 - self._last_vel_stamp)
-        # print(np.linalg.norm(self._current_vel), msg.header.stamp.nsecs / 1e9 - self._last_vel_stamp)
-        # self._last_vel_stamp = msg.header.stamp.nsecs / 1e9
-
-
-        if self._global_goal is not None:
-            q = msg.pose.pose.orientation
-            rho = np.linalg.norm(self._global_goal - self._pose_xy)
-            robot_theta = euler_from_quaternion([q.x, q.y, q.z, q.w])[-1]
-            theta = np.arctan2(self._global_goal[1] - self._pose_xy[1], self._global_goal[0] - self._pose_xy[0]) - robot_theta
-            theta = normalize_angle(theta)
-
-            self._goal_observation = np.array([rho, theta], dtype=np.float32)   
-
-
-    def _fpvimg_cb(self, event):
-        imgmsg = rospy.wait_for_message(self._image_topic, Image, timeout=5.0)
-        self._make_costmap(imgmsg_to_cv2(imgmsg))
-        self.update_current_cost()
-
-    def _waypoint_callback(self, msg: PathArray):
-
-        paths = np.array([[[pose.pose.position.x, pose.pose.position.y, 0] for pose in path.poses] for path in msg.paths]) # KxNx3
-        goal  = np.array([msg.goal.pose.position.x, msg.goal.pose.position.y])
-        collisions = np.frombuffer(msg.collisions.data, dtype=np.uint8).reshape((self._n_paths, self._max_wpts)).astype('bool')
-
-        if (goal != self._global_goal).all():
-            self._done_signal = False
-        self._global_goal = goal
-        self._local_goal  = msg.goal_relative.data
-        self._current_free_dir = msg.free_dir.data
-
-        if not self._done_signal:
-            # 1. remove collisions
-            not_collision_id = (collisions == 0).all(axis=1) # all waypoints are not collisions. shape K
-            paths = paths[not_collision_id]
-
-            if len(paths) == 0:
-                # trigger the counter for the recovery behaviour
-                rospy.logwarn("[Selector]: No feasible paths found, skipping update.")
-                self._alignment_cnt += 1
+        with self._lock:
+            if self._goal_key is None or np.any(goal_xyz != self._goal_key):
+                self._goal_key = goal_xyz
+                self._goal_fixed = fixed_from_robot.apply(robot_from_goal.apply(goal_xyz))[:2]
+                self._done = False
+                self.core.reset()
+            if self._done:
                 return
-
-            self._perform_trajectory_update(paths, msg, goal) # in whta frame is the goal?
-
-
-    def _perform_barebones_update(self, paths: np.ndarray, paths_msg: PathArray, goal: np.ndarray):
-        # Take in the filtered trajectories, calculate the goal distance costs
-        # update if better than EPS w/r to current path
-        local_goal = transform_to_frame(self.tf_buffer, np.concatenate((goal, np.zeros(1))).reshape(1, -1), self.robot_frame, self.global_frame).squeeze()[:2]
-        new_costs = self._get_distance_cost(paths, local_goal) # must be in the same frame AND THEY ARE NOT IN HERE BC PATH IS STILL IN THE LOCAL FRAME FKN TONTO WEON
-        # print("Last best cost: ", self._last_cost)
-        # print("Cadidates: ", new_costs, "id ", np.argmin(new_costs))
-        # print("update: ", self._last_cost - min(new_costs) > self.improvement_eps)
-        self._current_trajectory['free_dir'] = paths_msg.free_dir.data # independent of update or not
-
-        new_min_cost = min(new_costs)
-        if self._current_trajectory.get('cost', np.infty) - new_min_cost > self.improvement_eps: 
-            rospy.loginfo(f"Updating due to new best cost: {self._last_cost} -> {new_min_cost:.2f}")
-            best_path_id = np.argmin(new_costs)
-
-            T_optim = paths_msg.paths[best_path_id]
-            self._selected_traj_pub.publish(T_optim)
-
-            self._current_trajectory['traj_odom'] = transform_to_frame(self.tf_buffer, paths[best_path_id], "odom", "base_link")
-            self._current_trajectory['traj']      = paths[best_path_id]
-            self._current_trajectory['cost']      = new_min_cost
-            self._update_signal = True
-        
-        else:
-            pass # continue the loop until (1) get a better traj or (2) finish previous traj
-
-    
-    def _perform_periodic_update(self, paths: np.ndarray, paths_msg: PathArray, goal: np.ndarray):
-        # Take in the filtered trajectories, calculate the goal distance costs
-        # update EVERY TIME taking the minimum cost, at a fixed 'traj_gen_freq' frecuency.
-        local_goal = transform_to_frame(self.tf_buffer, np.concatenate((goal, np.zeros(1))).reshape(1, -1), self.robot_frame, self.global_frame).squeeze()[:2]
-        new_costs = self._get_distance_cost(paths, local_goal) # must be in the same frame AND THEY ARE NOT IN HERE BC PATH IS STILL IN THE LOCAL FRAME FKN TONTO WEON
-
-        self._current_trajectory['free_dir'] = paths_msg.free_dir.data # independent of update or not
-
-        new_min_cost = min(new_costs)
-        rospy.loginfo(f"Updating due to new best cost: {self._last_cost} -> {new_min_cost:.2f}")
-        best_path_id = np.argmin(new_costs)
-
-        T_optim = paths_msg.paths[best_path_id]
-        self._selected_traj_pub.publish(T_optim)
-
-        self._current_trajectory['traj_odom'] = transform_to_frame(self.tf_buffer, paths[best_path_id], "odom", "base_link")
-        self._current_trajectory['traj']      = paths[best_path_id]
-        self._current_trajectory['cost']      = new_min_cost
-        self._update_signal = True
-    
-
-    def _perform_clip_update(self, paths: np.ndarray, paths_msg: PathArray, goal: np.ndarray):
-
-        img = self._last_cmap.copy()
-
-        new_costs, costs_lst, _ = self._calculate_path_cost_full(img, paths, goal, source_frame=self.robot_frame)
-        new_min_cost = min(new_costs)
-
-        self._acost_pub.publish(Float32(data=new_min_cost))
-
-        self._current_trajectory['free_dir'] = paths_msg.free_dir.data # independent of update or not
-
-        last_cost = self._current_trajectory.get('cost', np.infty)
-        if new_min_cost < last_cost: # or last_traj_done 
-            rospy.loginfo(f"Updating due to new best cost: {last_cost:.3f} -> {new_min_cost:.3f}")
-            best_path_id = np.argmin(new_costs)
-
-            T_optim = paths_msg.paths[best_path_id]
-            self._selected_traj_pub.publish(T_optim)
-
-            paths = paths[best_path_id]
-            cost_lst = costs_lst[best_path_id]
-            # TODO(R3): subsample only when dispatching to the planner, not in the cost state.
-            stride = self._local_planner.waypoint_stride
-            if stride > 1:
-                paths = np.vstack((paths[::stride], paths[-1]))
-                cost_lst = np.concatenate((cost_lst[::stride], np.array([cost_lst[-1]])))
-
-            self._current_trajectory['traj']      = paths
-            self._current_trajectory['traj_odom'] = transform_to_frame(self.tf_buffer, paths, "odom", self.robot_frame)
-            self._current_trajectory['cost']      = new_min_cost
-            self._current_trajectory['frozen_costs'] = cost_lst
-            self._update_signal = True
-
-
-
-    def update_current_cost(self):
-        # This func is to update the cost of the currently executed trajectory, freezing past waypoint costs
-        costmap = self._last_cmap
-        if self._current_trajectory.get('traj_odom') is not None:
-            path = self._current_trajectory['traj_odom'][self._current_wpt:, :] # only the remaining path
-            path = path[np.newaxis] #path.reshape(1, *path.shape)
-            goal = self._global_goal
-
-            # print("previo  ", costmap.shape, path.shape, goal.shape)
-            cost, cost_lst, (pixel_points, out) = self._calculate_path_cost_full(costmap, path, goal, source_frame='odom')
-            # print("after", cost, cost_lst.shape, pixel_points.shape, out.shape)
-            # # print("updated cost:  ", cost, ' last cost ', self._current_trajectory['cost'], pixel_points.shape)
-
-            # self._update_traj_cost(self._current_trajectory['frozen_costs'],
-            #                        cost_lst.squeeze(), # (1, N_wpts) -> (N_wpts,)
-            #                        cost[0], # only one value 
-            #                        out.squeeze()) # (1, x) -> (x,) or it may have size 0
-
-            img = cv2.cvtColor(costmap * 100, cv2.COLOR_GRAY2RGB)
-            annotation = annotate_costmap(img, pixel_points[:, self._current_wpt:, :])
-            
-            annot_msg, annot_cmp_msg = cv2_to_imgmsg(annotation, compressed=True)
-            self._pathon_costmap_pub.publish(annot_msg)
-            self._pathon_costmapcmp_pub.publish(annot_cmp_msg)
-
-
-    def _update_traj_cost(self, frozen_costs, new_wpt_costs, total_cost, outmask):
-        print("frozen cost: ", frozen_costs, " new costs: ", new_wpt_costs)
-
-        if outmask.size > 0: # if there are out of bounds waypoints, keep their previous costs
-           new_wpt_costs[outmask] = frozen_costs[self._current_wpt:][outmask]
-
-        frozen_cost = sum(frozen_costs[:self._current_wpt])
-
-        self._current_trajectory['frozen_costs'][self._current_wpt:] = new_wpt_costs # keep prev costs and update the following
-        self._current_trajectory['cost'] = frozen_cost + total_cost # save current trajectory cost
-        
-        self._rcost_pub.publish(Float32(data=frozen_cost + total_cost))
-
-
-    def _update_traj_cost_old(self, x, y, costmap, umask, colmask, outmask=[]):
-        # update only the current trajectory, ideally using the above function?
-        prev_costs_lst = self._current_trajectory.get('frozen_costs')
-        goal_dst = self._current_trajectory.get('goal_dst')
-
-        if (prev_costs_lst and goal_dst) is not None:
-            cost, cost_lst = self._calculate_path_cost(x, y, costmap, umask, colmask, goal_dst, 
-                                                       start=self._current_wpt,
-                                                       outmask=outmask,
-                                                       prev_costs=prev_costs_lst) # TODO check exponent start idx on discount
-
-            frozen_cost = sum(prev_costs_lst[:self._current_wpt])
-
-            self._current_trajectory['frozen_costs'][self._current_wpt:] = cost_lst # keep prev costs and update the following
-            self._current_trajectory['cost'] = frozen_cost + cost # save current trajectory cost
-
-        else:
-            rospy.logerr("No selected trajectory yet")
-
-
-    def _make_costmap(self, img: np.ndarray):
-
-        inputs = self._clip_processor(text=self._constraints, 
-                                      images=[img] * len(self._constraints), 
-                                      padding="max_length", 
-                                      return_tensors="pt")
-        inputs = {k: v.to(torch.device('cuda')) for k, v in inputs.items()}
-         
-        with torch.no_grad():
-            outputs = self._clip_model(**inputs)
-        preds = outputs.logits.unsqueeze(1).cpu()
-        mask1 = np.argmax(preds[:, 0].cpu().numpy(), axis=0) # take the max likelihood
-        mask  = self._costs[mask1]
-        mask  = cv2.resize(mask.astype(np.uint8), img.shape[:2][::-1], interpolation=cv2.INTER_LINEAR)
-
-        self._last_cmap = mask
-
-        costmap_viz = humanize_costmap(cv2.resize(mask1.astype(np.uint8), img.shape[:2][::-1], interpolation=cv2.INTER_LINEAR))
-        costmap, costmap_cmp = cv2_to_imgmsg(costmap_viz, rgb=True, compressed=True)
-        self._costmap_pub.publish(costmap)
-        self._costmapcmp_pub.publish(costmap_cmp)
-
-
-    def _calculate_path_cost_full(self, map, paths, goal, source_frame):
-        K, N, _ = paths.shape
-        # shape: (K, N_wpts, 3), z is dummy 
-        pixel_points = transform_and_project_paths(self.tf_buffer, paths, self._K, source_frame=source_frame)
-        pixel_points = np.stack(pixel_points)
-
-
-        x = pixel_points[..., 0].astype(np.int64)  # (K, N_wpts)
-        outmask = np.where((x < 0) | (x > map.shape[1]))[0]
-        x = x.clip(0, map.shape[1] - 1)
-        y = pixel_points[..., 1].astype(np.int64).clip(0, map.shape[0] - 1)
-
-        semantic_values = map[y, x] # (K, N_wpts)
-
-        # Identify unknown space. All paths here are already collisions free!!!!! (in theory lol)
-        occlusions = semantic_values > 1 # > or >= 
-
-        # Compute semantic cost per waypoint vectorized
-        gamma_factors = self._gamma ** np.arange(N)  # (N_wpts,)
-
-        # Cost per waypoint: penalize unknown differently
-        waypoint_costs = (
-            (semantic_values * (~occlusions) + self.C_unk * occlusions) * gamma_factors
-        )  # (N_paths, N_wpts)
-
-        # Handle case when semantics are ignored
-        if self._ignore_semantics:
-            waypoint_costs.fill(0)
-
-        # Sum semantic waypoint costs across paths
-        semantic_cost = np.sum(waypoint_costs, axis=1)  # (N_paths,)
-
-        # Vectorized distance
-        local_goal = transform_to_frame(self.tf_buffer, 
-                                        np.concatenate((goal, np.zeros(1))).reshape(1, -1), 
-                                        self.robot_frame, self.global_frame).squeeze()[:2]
-
-        distance_cost = self._get_distance_cost(paths, local_goal) # (N_paths,)
-        
-        # Total path costs
-        path_costs = semantic_cost + distance_cost  # (N_paths,)
-
-        return path_costs, waypoint_costs, (pixel_points, outmask)
-
-
-    def _get_distance_cost(self, paths, goal):
-        dists = get_path_dist_to_goal(paths, goal)
-        distance_cost = np.log1p(dists[:, 0]) * self._beta # log will be less than 5 for a distance of 100
-        angle_cost    = np.abs(dists[:, 1]) / np.pi * self._beta2 # angle cost is max 1 w/no beta
-
-        return angle_cost + distance_cost
-    
-
-    def reset_trajectories(self):
-        self._current_trajectory = {}
-        self._current_wpt = 0
-        self.start = True
-
-
-    def execute_trajectory(self, path: np.ndarray) -> None:
-        """ Process the received trajectory and send waypoints to the local planner. """
-        rospy.loginfo("Processing new trajectory...")        
-        # OJO ACA, EL GOAL DEBE ESTAR EN EL FRAME DE ODOMETRIA PQ EL LOCAL PLANNER FUNCIONA CON ODOMETRIA
-        T_optim_global_frame = transform_to_frame(self.tf_buffer, path, target_frame=self.global_frame, source_frame=self.robot_frame)[:, :2]  # Kx2
-        T_optim_odom_frame   = transform_to_frame(self.tf_buffer, path, target_frame=self.global_frame, source_frame=self.robot_frame)[:, :2]  # Kx2
-
-        # T_optim_global_frame = np.vstack((T_optim_global_frame[::3], T_optim_global_frame[-1]))
-
-        for m in range(self._current_wpt, min(self._max_wpts, len(T_optim_global_frame))):  # Ensure we don't exceed the number of waypoints
-            current_waypoint = T_optim_global_frame[m]
-            self._current_wpt = m
-            print(f"Current waypoint {m}: {len(T_optim_global_frame)}")
-
-            self._local_planner.send_waypoint(T_optim_odom_frame[m], frame_id=self.global_frame)
-
-            start_time = rospy.Time.now()
-            waypoint_timeout = 10.0
-            while not rospy.is_shutdown():
-                elapsed_time = (rospy.Time.now() - start_time).to_sec()
-
-                goal_dst = np.linalg.norm(self._pose_xy - self._global_goal)
-                if goal_dst < self._goal_th:
-                    self._local_planner.cancel()
-                    # self._global_goal = None
-                    self._done_signal = True
-                    self._done_signal_pub.publish(Empty())
-                    rospy.loginfo("Goal reached.")
-                    rospy.sleep(1.0)
-                    self._alignment_cnt = 0
-                    return
-
-                planner_status = self._local_planner.status()
-                if (np.linalg.norm(self._pose_xy - current_waypoint) <= 1.0
-                        or planner_status == PlannerStatus.SUCCEEDED):
-                    rospy.loginfo(f"Waypoint {m} achieved. Moving to next waypoint.")
-                    break  # Move to next waypoint
-
-                if planner_status == PlannerStatus.FAILED:
-                    rospy.logwarn(f"Local planner failed on waypoint {m}; skipping it.")
-                    break
-
-                if elapsed_time > waypoint_timeout:
-                    rospy.logwarn(f"Skipping waypoint {m} due to timeout.")
-                    self._local_planner.cancel()
-                    break
-
-                if self._update_signal:
-                    rospy.logwarn("New trajectory received, stopping current execution.")
-                    self._local_planner.cancel()
-                    self._update_signal = False
-                    return  # Stop processing and wait for the new trajectory
-                
-                if self._alignment_cnt >= 3 and np.linalg.norm(self._current_vel) < 0.25: 
-                    self._local_planner.cancel()
-                    self._recovery_signal = True
-                    # self._done_signal = True
-                    self.reset_trajectories()
-                    self._alignment_cnt = 0
-                    return
-                
-                if self._joy_override:
-                    self._local_planner.cancel()
-                    return
-
-                rospy.sleep(0.1)
-
-        self.reset_trajectories()
-
-        rospy.loginfo("Trajectory execution complete.")
-
-
-    def recovery(self):
-        # 1. stop robot
-        stop_robot(self._cmd_vel_pub)
-
-        if self._current_free_dir[0] == -1: # all free space, turn in the direction of the goal
-            robot_dir = np.sign(self._local_goal[1])
-        else:
-            pts = np.array(self._current_free_dir) - np.pi / 2  # convert to [-pi/2, pi/2] range
-            closest_to_goal = min(pts, key=lambda p: abs(self._local_goal[1] - p))
-            robot_dir = np.sign(closest_to_goal)
-
-        self.reset_trajectories()
-        self._done_signal = False
-
-        # 2. obtain the rotation direction and speed
-        kp = 0.4
-        vel = robot_dir * kp
-
-        while self._current_trajectory.get('traj') is None:
-            rotate_in_place(self._cmd_vel_pub, vel)
-
-        self.reset_trajectories()
-        self._recovery_signal = False
-        self._alignment_cnt   = 0
-
-
-    def run(self):
-        if not self._joy_override:
-            if self._current_trajectory.get('traj') is not None and not self._done_signal:
-                self.execute_trajectory(self._current_trajectory['traj'])
-
-            elif self._alignment_cnt >= 3 and np.linalg.norm(self._current_vel) < 0.25 and not self._done_signal:
-                self.recovery()
-        else:
-            print('Esperanding goal papito')
-            rospy.sleep(0.2)
-
-
-
-# Main function
-if __name__ == "__main__":
-    rospy.init_node("selector_node")
-
-    projector = TrajectorySelector()
-    rate = rospy.Rate(10)  # 10 Hz
+            if not feasible.any():
+                self._empty_sets += 1
+                rospy.logwarn_throttle(2.0, "[selector] no collision-free candidates")
+                return
+            self._empty_sets = 0
+            if self.core.costmap is None:
+                rospy.logwarn_throttle(2.0, "[selector] waiting for the first cost map")
+                return
+            decision, fixed_path = self.core.on_candidates(
+                paths, goal_robot, cam_from_robot, fixed_from_robot, feasible
+            )
+            if decision.switch:
+                self._new_trajectory = True
+                self._recovery_until = None
+        self._best_cost_pub.publish(Float32(data=decision.best_cost))
+        if decision.switch:
+            rospy.loginfo(
+                f"[selector] switch: J {decision.current_cost:.2f} -> {decision.best_cost:.2f}"
+            )
+            self._selected_pub.publish(numpy_to_path(fixed_path, self.fixed_frame, stamp))
+
+    # -------------------------------------------------------------- execution
+    def step(self) -> None:
+        """One tick of the (non-blocking) execution loop."""
+        if self._joy_override:
+            self._abort_motion()
+            return
+        if self._done or self._goal_fixed is None:
+            return
+        robot = lookup(self.tf_buffer, self.fixed_frame, self.robot_frame)
+        if robot is None:
+            return
+        position = robot.translation[:2]
+
+        if np.linalg.norm(position - self._goal_fixed) < self.goal_th:
+            rospy.loginfo("[selector] goal reached")
+            self._abort_motion()
+            with self._lock:
+                self._done = True
+                self.core.reset()
+            self._done_pub.publish(Empty())
+            return
+
+        if self._recovery_until is not None:
+            self._recovery_tick()
+            return
+
+        with self._lock:
+            waypoints = self.core.current_waypoints
+            if self._new_trajectory:
+                self._new_trajectory = False
+                self.planner.cancel()
+                self._dispatch = dispatch_indices(len(waypoints), self.planner.waypoint_stride)
+                self._sent_at = None
+
+        if waypoints is None or not self._dispatch:
+            if self._empty_sets >= self.recovery_after and self._speed < 0.25:
+                self._start_recovery()
+            return
+
+        idx = self._dispatch[0]
+        if self._sent_at is None:
+            self.planner.send_waypoint(tuple(waypoints[idx, :2]), frame_id=self.fixed_frame)
+            self._sent_at = rospy.Time.now()
+            return
+
+        status = self.planner.status()
+        reached = np.linalg.norm(position - waypoints[idx, :2]) <= self.reach_radius
+        timed_out = (rospy.Time.now() - self._sent_at).to_sec() > self.waypoint_timeout
+        if reached or status in (PlannerStatus.SUCCEEDED, PlannerStatus.FAILED) or timed_out:
+            if not reached and status != PlannerStatus.SUCCEEDED:
+                rospy.logwarn(f"[selector] skipping waypoint {idx} ({status.name}, {timed_out=})")
+                self.planner.cancel()
+            with self._lock:
+                if not self._new_trajectory:  # progress refers to the trajectory dispatched
+                    self.core.on_progress(idx + 1)
+            self._dispatch.pop(0)
+            self._sent_at = None
+
+    def _abort_motion(self) -> None:
+        self.planner.cancel()
+        self._dispatch, self._sent_at, self._recovery_until = [], None, None
+
+    def _start_recovery(self) -> None:
+        """Rotate towards the free direction closest to the goal (rate-limited, bounded)."""
+        dirs = [d - np.pi / 2 for d in self._free_dirs if d >= 0]  # 0 = straight ahead
+        target = (
+            min(dirs, key=lambda d: abs(d - self._goal_bearing)) if dirs else self._goal_bearing
+        )
+        self._recovery_vel = float(np.sign(target) or 1.0) * self.recovery_speed
+        self._recovery_until = rospy.Time.now() + rospy.Duration(self.recovery_timeout)
+        self._empty_sets = 0
+        rospy.logwarn("[selector] no feasible candidates, rotating in place")
+
+    def _recovery_tick(self) -> None:
+        if rospy.Time.now() > self._recovery_until:
+            stop_robot(self._cmd_vel_pub)
+            self._recovery_until = None
+            return
+        rotate_in_place(self._cmd_vel_pub, self._recovery_vel)
+
+    # ---------------------------------------------------------- visualisation
+    def _publish_costmap(self, costmap, waypoints, cam_from_fixed, stamp) -> None:
+        if self._costmap_pub.get_num_connections() + self._costmap_cmp_pub.get_num_connections():
+            raw, cmp = cv2_to_imgmsg(colorize_labels(costmap.labels), self.camera_frame, stamp)
+            self._costmap_pub.publish(raw)
+            self._costmap_cmp_pub.publish(cmp)
+        if waypoints is None or cam_from_fixed is None:
+            return
+        if self._annot_pub.get_num_connections() + self._annot_cmp_pub.get_num_connections():
+            pixels, valid = project_to_image(
+                cam_from_fixed.apply(waypoints),
+                self.core.intrinsics,
+                self.core.image_size,
+                self.cfg.min_depth,
+                self.cfg.camera_optical_frame,
+            )
+            img = colorize_labels(costmap.labels)
+            raw, cmp = cv2_to_imgmsg(draw_paths(img, pixels, valid), self.camera_frame, stamp)
+            self._annot_pub.publish(raw)
+            self._annot_cmp_pub.publish(cmp)
+
+
+def main() -> None:
+    rospy.init_node("sem_navae_selector")
+    node = SelectorNode()
+    rate = rospy.Rate(float(param("execution/rate_hz", 10.0)))
     while not rospy.is_shutdown():
-        projector.run()
+        node.step()
         rate.sleep()
+
+
+if __name__ == "__main__":
+    main()
