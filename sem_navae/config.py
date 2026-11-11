@@ -48,7 +48,8 @@ class ModelConfig:
     feature_dim: int = 256  # per-stream feature size (paper: 256)
     context_dim: int = 256  # h_x
     latent_dim: int = 512  # N_z (paper: 512)
-    posterior_hidden_dim: int = 128
+    posterior_hidden_dim: int = 128  # LSTM size of q(z|x,y)
+    posterior_mlp_dim: int = 256
     prior_hidden_dim: int = 512
     use_feature_attention: bool = True
     # --- trajectories ---
@@ -62,6 +63,7 @@ class ModelConfig:
     heatmap: HeatmapSpec = field(default_factory=HeatmapSpec)
     max_accel: float = 0.5  # [m/s^2] (paper: 0.5)
     min_speed: float = 0.1  # [m/s]
+    max_speed: float = 2.0  # [m/s]
     max_heading_change_deg: float = 45.0  # per step
     num_proposals: int = 20000  # rejection-sampling proposals per step
 
