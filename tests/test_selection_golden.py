@@ -1,7 +1,7 @@
 """Parity of sem_navae.selection with the legacy selector's ``_calculate_path_cost_full``.
 
 Golden values come from ``tests/golden/generate_selection_from_legacy.py``. The port fixes
-R4 (goal heading), R6 (projection validity) and uses Eq. 8's j = 1..N discount, so the
+the goal heading and the projection validity and uses Eq. 8's j = 1..N discount, so the
 checks below state each relation to the legacy numbers explicitly.
 """
 
@@ -38,7 +38,7 @@ def test_projection_matches_legacy_in_front_of_camera():
     depth = _tf("camera_link", "base_link").apply(fx.paths())[..., 0]
     front = depth > 0.1
     np.testing.assert_allclose(pixels[front], GOLDEN["pixels"][front])
-    # R6: the backwards path (index 4) is behind the camera; the legacy code mirrored it
+    # The backwards path (index 4) is behind the camera; the legacy code mirrored it
     # into the image (top rows) instead of rejecting it.
     assert not valid[4].any()
     legacy = GOLDEN["pixels"][4]
@@ -71,5 +71,5 @@ def test_goal_cost_relation_to_legacy():
     legacy_sem = GOLDEN["waypoint_costs"].sum(axis=1)
     legacy_goal = GOLDEN["path_costs"] - legacy_sem
     dist_term = fx.ALPHA1 * np.log1p(np.linalg.norm(paths[:, -1, :2] - goal_base, axis=1))
-    # R4: heading term flips, alpha2*|theta|/pi -> alpha2*(1 - |theta|/pi).
+    # The heading term flips, alpha2*|theta|/pi -> alpha2*(1 - |theta|/pi).
     np.testing.assert_allclose(new - dist_term, fx.ALPHA2 - (legacy_goal - dist_term))

@@ -49,7 +49,7 @@ def get_path_dist_to_goal(waypoints: np.ndarray, goal: np.ndarray) -> np.ndarray
         waypoints[:, -1, 1] - waypoints[:, -2, 1], waypoints[:, -1, 0] - waypoints[:, -2, 0]
     )
     # Direction from the last waypoint *towards* the goal (the original code used
-    # wp - goal, which scored paths heading straight at the goal as the worst; R4).
+    # wp - goal, which scored paths heading straight at the goal as the worst).
     last_to_goal = np.arctan2(goal[1] - waypoints[:, -1, 1], goal[0] - waypoints[:, -1, 0])
     angles = normalize_angle_batch(final_heading - last_to_goal)
     return np.stack((distances, angles), axis=-1)

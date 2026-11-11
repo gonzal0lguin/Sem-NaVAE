@@ -19,7 +19,7 @@ def _straight(direction, n=5):
     return (np.arange(1, n + 1)[:, None] * d)[None]
 
 
-def test_heading_towards_goal_scores_zero():  # R4
+def test_heading_towards_goal_scores_zero():
     goal = np.array([20.0, 0.0])
     towards = get_path_dist_to_goal(_straight([1, 0]), goal)[0, 1]
     away = get_path_dist_to_goal(_straight([-1, 0]), goal)[0, 1]

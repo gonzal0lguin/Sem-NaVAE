@@ -48,7 +48,7 @@ def test_axes_follow_the_dataset_convention():
 
 
 def test_collision_loss_has_a_gradient():
-    # T1: the legacy term was computed on detached positions and had no gradient.
+    # The legacy term was computed on detached positions and had no gradient.
     path = straight(y=0.2).requires_grad_(True)
     loss_fn().collision_loss(path, obstacle_map(5.0, 0.0)).sum().backward()
     grad = path.grad[0, 0]
@@ -63,7 +63,7 @@ def test_output_shape():
 
 
 def test_prior_term_does_not_depend_on_the_number_of_identical_ground_truths():
-    # T3: the legacy term subtracted log(M) twice.
+    # The legacy term subtracted log(M) twice.
     from sem_navae.models.navae import prior_log_likelihood
 
     for m in (1, 2, 5):

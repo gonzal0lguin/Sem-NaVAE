@@ -43,7 +43,7 @@ def legacy_config() -> Config:
 
 
 # The legacy code smoothed the heatmap with sigma 5 (forward), 6 (training) and 8 (sampling)
-# and its decoder read the 0.1 m/px map as if it were 0.2 m/px around pixel 150 (T6). The
+# and its decoder read the 0.1 m/px map as if it were 0.2 m/px around pixel 150. The
 # port has one HeatmapSpec; these overrides reproduce the legacy numbers.
 LEGACY_TRAIN_SIGMA, LEGACY_SAMPLE_SIGMA = 6.0, 8.0
 LEGACY_DECODER_SPEC = HeatmapSpec(size_m=60.0, resolution=0.2)  # origin pixel 150
@@ -92,20 +92,20 @@ def test_train_forward_and_loss(setup):
     model.eval()
     losses = NaVAELoss(cfg.loss, cfg.data)(out, epoch=30)
     np.testing.assert_allclose(out[Keys.kl].mean().item(), GOLDEN["train_kl"], **TOL)
-    # T3: the legacy prior term subtracted log(M_b) twice; the port's is larger by the
+    # The legacy prior term subtracted log(M_b) twice; the port's is larger by the
     # batch mean of log(M_b) (M = 3 and 2 ground truths in the synthetic batch).
     log_m = np.mean(np.log([3, 2]))
     np.testing.assert_allclose(out[Keys.ll_prior].item(), GOLDEN["train_ll_prior"] + log_m, **TOL)
-    # T3: the posterior term is a plain expectation (Eq. 4), not a log-mean-exp: no golden.
+    # The posterior term is a plain expectation (Eq. 4), not a log-mean-exp: no golden.
     np.testing.assert_allclose(
         out[Keys.nll].item(), -(out[Keys.ll_prior] + out[Keys.ll_posterior]).item(), **TOL
     )
-    # T1: the legacy collision term saw only the best prior mean, detached; the port keeps
+    # The legacy collision term saw only the best prior mean, detached; the port keeps
     # every prior mean (B, N, N_w, 2) in the graph. The legacy path must be one of them.
     paths = out[Keys.prior_mean_paths].detach().numpy()
     for b, legacy_path in enumerate(GOLDEN["train_prior_mean_paths"]):
         assert np.abs(paths[b] - legacy_path).max(axis=(1, 2)).min() < 1e-4
-    # T2: Eq. 5 replaces the legacy arctanh distance penalty (no golden value).
+    # Eq. 5 replaces the legacy arctanh distance penalty (no golden value).
     expected = out[Keys.nll] + losses[Keys.kl_loss] + losses[Keys.collision_loss]
     np.testing.assert_allclose(losses[Keys.loss].item(), expected.item(), **TOL)
 
@@ -118,7 +118,7 @@ def test_sample_forward(setup):
 
 
 def test_goal_cost():
-    # R4 fix: the heading now uses the direction towards the goal, so |theta| = pi - |legacy|.
+    # The heading now uses the direction towards the goal, so |theta| = pi - |legacy|.
     new = get_path_dist_to_goal(PATHS_FOR_GOAL, GOAL)
     legacy = GOLDEN["goal_cost"]
     np.testing.assert_allclose(new[:, 0], legacy[:, 0])

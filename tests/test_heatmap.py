@@ -1,4 +1,4 @@
-"""The heatmap builder and the decoder agree on where a metric point lands (T6)."""
+"""The heatmap builder and the decoder agree on where a metric point lands."""
 
 import pytest
 

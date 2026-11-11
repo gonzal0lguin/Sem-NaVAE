@@ -1,4 +1,4 @@
-"""Rejection-sampling constraints of the decoder (paper Sec. III-A3, fix T7)."""
+"""Rejection-sampling constraints of the decoder (paper Sec. III-A3)."""
 
 import math
 

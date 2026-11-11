@@ -12,7 +12,7 @@ from sem_navae.models.heatmap import metric_to_pixel
 
 
 def legacy_constrained_sample(self, proposals, pred_tm1, heatmap, mu, preds):
-    """Legacy rejection rule (T7): the 'heading' check compares consecutive velocity
+    """Legacy rejection rule: the 'heading' check compares consecutive velocity
     *differences* and is skipped on the first step; acceleration ignores dt."""
     pred_tm2 = preds[-2] if len(preds) > 1 else None
     speed = proposals.norm(dim=-1)
@@ -34,7 +34,7 @@ def legacy_constrained_sample(self, proposals, pred_tm1, heatmap, mu, preds):
 
 
 def legacy_current_velocity(batch):
-    """Legacy decoder initial state (T8b): the *normalised* velocity, used as if in m/s."""
+    """Legacy decoder initial state: the *normalised* velocity, used as if in m/s."""
     return batch["previous_path"][:, -1, 2:4]
 
 

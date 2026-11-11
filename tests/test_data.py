@@ -1,4 +1,4 @@
-"""Deterministic, persisted train/val split (fix T8)."""
+"""Deterministic, persisted train/val split."""
 
 import json
 
