@@ -8,8 +8,7 @@
     in the ROS-free Python package sem_navae (pip install).
   </description>
 
-  <!-- TODO(release): set the public maintainer e-mail. -->
-  <maintainer email="maintainer@todo.invalid">Gonzalo Olguín</maintainer>
+  <maintainer email="golguinm@gmail.com">Gonzalo Olguín</maintainer>
   <license>MIT</license>
   <url type="repository">https://github.com/gonzal0lguin/Sem-NaVAE</url>
   <author>Gonzalo Olguín</author>
