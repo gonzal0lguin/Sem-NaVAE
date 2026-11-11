@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- Replays a synthetic sequence (camera_info, tf, class-label images, PathArrays) through
+     selector_node with the null planner and checks the switching decisions.
+     No CLIPSeg, no robot: costmap/topic feeds class labels directly. -->
+<launch>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="odom_to_base"
+        args="0 0 0 0 0 0 odom base_link"/>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_camera"
+        args="0 0 0.6 0 0 0 base_link camera_link"/>
+
+  <node pkg="sem_navae_ros" type="selector_node.py" name="sem_navae_selector" output="screen">
+    <rosparam command="load" file="$(find sem_navae_ros)/config/sem_navae.yaml"/>
+    <param name="costmap/topic" value="/test/labels"/>
+    <param name="topics/camera_ns" value="/test/camera"/>
+    <param name="local_planner/plugin" value="null"/>
+    <rosparam param="local_planner/params">{report: active}</rosparam>
+    <param name="execution/waypoint_timeout" value="1000.0"/>
+  </node>
+
+  <test test-name="selection_replay" pkg="sem_navae_ros" type="selection_replay_test.py"
+        time-limit="120.0"/>
+</launch>

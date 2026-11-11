@@ -39,7 +39,13 @@ from sem_navae_ros.msg import PathArray
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Joy
 from std_msgs.msg import Empty, Float32
 
-from sem_navae.selection import SelectionCore, project_to_image, selection_config_from_dict
+from sem_navae.selection import (
+    SelectionCore,
+    SemanticCostmap,
+    project_to_image,
+    resize_nearest,
+    selection_config_from_dict,
+)
 from sem_navae.selection.clipseg_costmap import ClipSegCostmapper
 
 
@@ -80,9 +86,14 @@ class SelectorNode:
         info = rospy.wait_for_message(camera_ns + "/camera_info", CameraInfo, timeout=30.0)
         K, image_size = camera_params(info)
         self.core = SelectionCore(self.cfg, K, image_size)
-        self.costmapper = ClipSegCostmapper(
-            self.cfg.classes, self.cfg.prompt_template, self.cfg.clipseg_model
-        )
+        # costmap/topic: optional external class-label image (mono8, class indices in the
+        # order of selection/classes) used instead of CLIPSeg (other segmenters, tests).
+        self.label_topic = param("costmap/topic", "")
+        self.costmapper = None
+        if not self.label_topic:
+            self.costmapper = ClipSegCostmapper(
+                self.cfg.classes, self.cfg.prompt_template, self.cfg.clipseg_model
+            )
 
         spec = param("local_planner/plugin", "move_base")
         self.planner = load_local_planner(spec, param("local_planner/params", {}))
@@ -109,9 +120,13 @@ class SelectorNode:
             param("topics/cmd_vel", "/cmd_vel"), Twist, queue_size=1
         )
 
-        rospy.Subscriber(
-            camera_ns + "/image_raw", Image, self._image_cb, queue_size=1, buff_size=2**24
-        )
+        if self.costmapper is None:
+            rospy.Subscriber(self.label_topic, Image, self._labels_cb, queue_size=1)
+        else:
+            rospy.Subscriber(
+                camera_ns + "/image_raw", Image, self._image_cb, queue_size=1, buff_size=2**24
+            )
+            rospy.Timer(rospy.Duration(1.0 / self.cfg.clip_rate_hz), self._costmap_timer)
         rospy.Subscriber(
             param("topics/trajs_filt", "/sem_navae/trajectories_filt"),
             PathArray,
@@ -120,7 +135,6 @@ class SelectorNode:
         )
         rospy.Subscriber(param("topics/odom", "/odom"), Odometry, self._odom_cb, queue_size=1)
         rospy.Subscriber(param("topics/joy", "/joy"), Joy, self._joy_cb, queue_size=1)
-        rospy.Timer(rospy.Duration(1.0 / self.cfg.clip_rate_hz), self._costmap_timer)
         rospy.loginfo(f"[selector] mode={self.cfg.mode}, planner={spec}, fixed={self.fixed_frame}")
 
     # ----------------------------------------------------------------- inputs
@@ -139,17 +153,25 @@ class SelectorNode:
         if not self._image_new:
             return
         msg, self._image_new = self._image_msg, False
-        rgb = imgmsg_to_rgb(msg)
-        costmap = self.costmapper(rgb)
-        cam_from_fixed = lookup(
-            self.tf_buffer, self.camera_frame, self.fixed_frame, msg.header.stamp
-        )
+        self._process_costmap(self.costmapper(imgmsg_to_rgb(msg)), msg.header.stamp)
+
+    def _labels_cb(self, msg: Image) -> None:
+        labels = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+        labels = labels[:, : msg.width].astype(int)
+        width, height = self.core.image_size
+        if labels.shape != (height, width):
+            labels = resize_nearest(labels, (height, width))
+        costmap = SemanticCostmap(costs=self.core.class_costs[labels], labels=labels)
+        self._process_costmap(costmap, msg.header.stamp)
+
+    def _process_costmap(self, costmap: SemanticCostmap, stamp) -> None:
+        cam_from_fixed = lookup(self.tf_buffer, self.camera_frame, self.fixed_frame, stamp)
         with self._lock:
             cost = self.core.on_costmap(costmap, cam_from_fixed)
             waypoints = self.core.current_waypoints
         if cost is not None:
             self._current_cost_pub.publish(Float32(data=cost))
-        self._publish_costmap(costmap, waypoints, cam_from_fixed, msg.header.stamp)
+        self._publish_costmap(costmap, waypoints, cam_from_fixed, stamp)
 
     def _candidates_cb(self, msg: PathArray) -> None:
         if not msg.paths:
